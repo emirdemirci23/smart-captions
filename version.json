@@ -1,7 +1,7 @@
 {
-  "version": "1.1.0",
+  "version": "1.2.0",
   "date": "2026-10-31",
-  "notes": "Auto-update from GitHub, SRT encoding fixes",
+  "notes": "Continuous captions, one sentence per caption, no lone one-word captions",
   "files": [
     "index.html",
     "css/style.css",

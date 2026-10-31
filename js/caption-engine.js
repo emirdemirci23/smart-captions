@@ -38,7 +38,9 @@
     maxLines: 2,
     minDuration: 0.8,      // seconds a caption stays on screen at minimum
     maxDuration: 6,        // seconds; longer captions are penalised
-    closeGapsUnder: 0.5,   // gaps shorter than this are closed (caption held)
+    continuous: true,      // every caption lasts until the next one starts
+    splitSentences: true,  // never put the end of one sentence and the start of another together
+    closeGapsUnder: 0.5,   // (continuous off) gaps shorter than this are closed
     minGap: 0.067,         // seconds between consecutive captions (~2 frames)
     pauseSplit: 0.8,       // a pause longer than this inside a caption is penalised
     offset: 0,             // seconds added to every caption
@@ -664,7 +666,10 @@
     var noEnd = toSet(lang.noEnd), noStart = toSet(lang.noStart);
     var b, i;
 
-    for (b = 1; b < n; b++) sentEnd[b] = isSentenceEnd(words[b - 1].text) ? 1 : 0;
+    for (b = 1; b < n; b++) {
+      var pw = words[b - 1].text;
+      sentEnd[b] = isSentenceEnd(pw) && !(/(\.\.\.|…)["'”’»)\]]*$/.test(pw) && /^["'“‘«(]*\p{Ll}/u.test(words[b].text)) ? 1 : 0;
+    }
 
     // 1. Keep-together phrases.
     var index = Object.create(null);
@@ -710,9 +715,18 @@
       if (TITLES[normed[b - 1]] && isCap(words[b].text)) { forbidden[b] = 1; reason[b] = reason[b] || 'title'; }
     }
 
-    // 4. Forced breaks from the script win over everything.
-    for (i = 0; i < n - 1; i++) {
-      if (words[i].breakAfter === 'force') { forced[i + 1] = 1; forbidden[i + 1] = 0; }
+    // 4. Forced breaks win over everything: "|" in the script and, unless
+    //    disabled, every sentence end (one sentence per caption).
+    for (b = 1; b < n; b++) {
+      if (words[b - 1].breakAfter === 'force' || (o.splitSentences && sentEnd[b])) { forced[b] = 1; forbidden[b] = 0; }
+    }
+
+    // "Hard edges": a caption bounded by these on both sides may be shorter than
+    // the minimum (a one-word sentence, or a word isolated by long pauses).
+    var edge = new Uint8Array(n + 1);
+    edge[0] = edge[n] = 1;
+    for (b = 1; b < n; b++) {
+      if (forced[b] || sentEnd[b] || words[b].start - words[b - 1].end > o.pauseSplit) edge[b] = 1;
     }
 
     // 5. Cost of ending a caption at each boundary.
@@ -730,7 +744,7 @@
       cost[b] = c;
     }
 
-    return { forbidden: forbidden, forced: forced, cost: cost, sentEnd: sentEnd, reason: reason };
+    return { forbidden: forbidden, forced: forced, cost: cost, sentEnd: sentEnd, edge: edge, reason: reason };
   }
 
   // ---------------------------------------------------------------------------
@@ -766,7 +780,10 @@
         }
         if (best[i] === Infinity) continue;
         var k = j - i, c = 0;
-        if (k < o.minWords) c += 30 * (o.minWords - k);
+        if (k < o.minWords && !(B.edge[i] && B.edge[j])) {
+          c += 30 * (o.minWords - k);
+          if (k === 1) c += 400;                    // no lone words inside running speech
+        }
         if (k > o.maxWords) c += 1000 * (k - o.maxWords);
         if (chars > maxChars) c += 15 * (chars - maxChars);
         var dur = words[j - 1].end - words[i].start;
@@ -801,32 +818,33 @@
   }
 
   function finalizeTiming(caps, o) {
-    var k, c;
+    var fd = o.frameDuration > 0 ? o.frameDuration : 0;
+    var tick = fd || 0.04;
+    var snap = function (t) { return fd ? Math.round(t / fd) * fd : t; };
+    var k, c, next;
     for (k = 0; k < caps.length; k++) {
       c = caps[k];
-      c.start = c.words[0].start;
-      c.end = Math.max(c.words[c.words.length - 1].end, c.start + o.minDuration);
-      var next = caps[k + 1];
-      if (next) {
-        var ns = next.words[0].start;
-        if (ns - c.words[c.words.length - 1].end < o.closeGapsUnder) c.end = ns - o.minGap;
-        if (c.end > ns - o.minGap) c.end = ns - o.minGap;
-        if (c.end <= c.start) c.end = c.start + 0.04;
-      }
+      c.start = snap(c.words[0].start + o.offset);
+      c.speechEnd = c.words[c.words.length - 1].end + o.offset;
+      if (k > 0 && c.start <= caps[k - 1].start) c.start = caps[k - 1].start + tick;
     }
-    var fd = o.frameDuration > 0 ? o.frameDuration : 0;
-    var prevEnd = -Infinity;
-    caps.forEach(function (cap) {
-      cap.start += o.offset;
-      cap.end += o.offset;
-      if (fd) {
-        cap.start = Math.round(cap.start / fd) * fd;
-        cap.end = Math.round(cap.end / fd) * fd;
+    for (k = 0; k < caps.length; k++) {
+      c = caps[k];
+      next = caps[k + 1];
+      var e = Math.max(c.speechEnd, c.start + o.minDuration);
+      if (next && o.continuous) {
+        e = next.start;                              // hold until the next caption starts
+      } else if (next) {
+        if (next.start - c.speechEnd < o.closeGapsUnder) e = next.start - o.minGap;
+        e = Math.min(snap(e), next.start - o.minGap);
+        if (e <= c.start) e = Math.min(next.start, c.start + tick);
+      } else {
+        e = snap(e);
+        if (e <= c.start) e = c.start + tick;
       }
-      if (cap.start < prevEnd) cap.start = prevEnd;
-      if (cap.end <= cap.start) cap.end = cap.start + (fd || 0.04);
-      prevEnd = cap.end;
-    });
+      c.end = e;
+      delete c.speechEnd;
+    }
     return caps.filter(function (cap) {
       if (cap.end <= 0) return false;
       if (cap.start < 0) cap.start = 0;
@@ -853,6 +871,8 @@
     o.maxCharsPerLine = Math.max(10, o.maxCharsPerLine);
     o.protectNames = !!o.protectNames;
     o.protectNumbers = !!o.protectNumbers;
+    o.continuous = !!o.continuous;
+    o.splitSentences = !!o.splitSentences;
     if (!LANGS[o.language]) o.language = 'other';
     if (!Array.isArray(o.phrases)) o.phrases = LANGS[o.language].phrases.slice();
     return o;
@@ -882,7 +902,7 @@
       var cw = ws.slice(sp[0], sp[1]);
       var lines = splitLines(cw, sp[0], B, o);
       var flags = [];
-      if (cw.length < o.minWords) flags.push('short');
+      if (cw.length < o.minWords && !(B.edge[sp[0]] && B.edge[sp[1]])) flags.push('short');
       if (cw.length > o.maxWords) {
         var why = [];
         for (var b = sp[0] + 1; b < sp[1]; b++) if (B.reason[b] && why.indexOf(B.reason[b]) < 0) why.push(B.reason[b]);

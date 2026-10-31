@@ -126,3 +126,5 @@ body.dragging { outline: 2px dashed var(--accent); outline-offset: -4px; }
 .header-right { display: flex; gap: 8px; align-items: baseline; min-width: 0; }
 .update { color: var(--muted); font-size: 11px; white-space: nowrap; }
 .update.action { color: #fff; background: var(--accent); border-radius: 3px; padding: 1px 7px; cursor: pointer; }
+.span2 { grid-column: 1 / -1; }
+.field.disabled { opacity: .45; }

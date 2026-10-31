@@ -164,7 +164,7 @@ test('two lines are balanced and respect max chars', () => {
 
 test('timing: no overlaps, min gap kept, offset applied', () => {
   const text = 'First caption here now. Second caption right after. Third one comes later.';
-  const res = E.generate({ timedText: whisperJSON(text), options: { minWords: 3, maxWords: 4, offset: 10, minGap: 0.1 } });
+  const res = E.generate({ timedText: whisperJSON(text), options: { minWords: 3, maxWords: 4, offset: 10, minGap: 0.1, continuous: false } });
   for (let i = 1; i < res.captions.length; i++) {
     assert.ok(res.captions[i].start >= res.captions[i - 1].end + 0.099, 'gap kept');
   }
@@ -207,4 +207,58 @@ test('decodes UTF-8, UTF-16 and Turkish Windows-1254 files', () => {
   const be = E.decodeBytes(new Uint8Array(Buffer.concat([Buffer.from([0xFE, 0xFF]), utf16be])));
   assert.equal(be, text);
   assert.equal(E.parseTimedTranscript(E.decodeBytes(new Uint8Array(utf16))).words.length, 5);
+});
+
+test('continuous: every caption lasts until the next one starts', () => {
+  const text = 'First caption here now. Second caption right after. Third one comes much later on.';
+  const res = E.generate({ timedText: whisperJSON(text), options: { minWords: 2, maxWords: 4, frameDuration: 1 / 25 } });
+  for (let i = 0; i < res.captions.length - 1; i++) {
+    assert.equal(res.captions[i].end, res.captions[i + 1].start, `caption ${i + 1} must end when ${i + 2} starts`);
+    assert.ok(res.captions[i].end > res.captions[i].start);
+  }
+  const last = res.captions[res.captions.length - 1];
+  assert.ok(last.end - last.start >= 0.8);
+});
+
+test('two sentences never share a caption, even when short', () => {
+  const text = 'Hello. I am here. This is a much longer sentence that keeps going for a while. Ok then. Bye!';
+  const res = E.generate({ timedText: whisperJSON(text), options: { minWords: 4, maxWords: 8 } });
+  const t = capTexts(res);
+  t.forEach((c) => assert.ok(!/[.!?]\s/.test(c), `two sentences in one caption: "${c}"`));
+  assert.ok(t.includes('Hello.'), t.join(' | '));
+  assert.ok(t.includes('Bye!'), t.join(' | '));
+  // One-word sentences are expected, so they are not flagged as problems.
+  res.captions.filter((c) => c.wordCount === 1).forEach((c) => assert.deepEqual(c.flags, []));
+});
+
+test('"..." followed by lowercase continues the sentence', () => {
+  const text = 'I was... thinking about it a lot.';
+  const res = E.generate({ timedText: whisperJSON(text), options: { minWords: 3, maxWords: 8 } });
+  assert.equal(res.captions.length, 1, capTexts(res).join(' | '));
+});
+
+test('no one-word captions inside running speech', () => {
+  const texts = [
+    'We need paper as well as pens or pencils for the class today and tomorrow too.',
+    'So today I want to talk about something that a lot of people ask me about every week.',
+    'Bugün sizinle yeni bir proje için çok önemli bir konuyu konuşmak istiyorum.',
+  ];
+  for (const [i, text] of texts.entries()) {
+    for (const [min, max] of [[2, 3], [2, 4], [3, 5], [2, 7]]) {
+      const res = E.generate({ timedText: whisperJSON(text), options: { minWords: min, maxWords: max, language: i === 2 ? 'tr' : 'en', phrases: ['as well as'] } });
+      res.captions.forEach((c) => assert.ok(c.wordCount > 1, `lone word "${c.text}" (min ${min}, max ${max}): ${capTexts(res).join(' | ')}`));
+    }
+  }
+});
+
+test('a word isolated by long pauses may stand alone', () => {
+  const words = [
+    { word: ' Okay', start: 0, end: 0.4 },
+    { word: ' so', start: 2.5, end: 2.7 },                       // long pause before
+    { word: ' today', start: 2.8, end: 3.1 }, { word: ' we', start: 3.2, end: 3.3 },
+    { word: ' start', start: 3.4, end: 3.7 },
+  ];
+  const res = E.generate({ timedText: JSON.stringify({ words }), options: { minWords: 3, maxWords: 6 } });
+  assert.deepEqual(capTexts(res), ['Okay', 'so today we start']);
+  assert.deepEqual(res.captions[0].flags, []);
 });

@@ -5,7 +5,9 @@ A Premiere Pro panel that turns your transcript into **synchronized captions**. 
 - keeps every caption between a **minimum and maximum number of words**
 - **never splits phrases that belong together**: your own list (e.g. "thank you so much", "as well as"), names ("New York City"), numbers with units ("10 minutes"), titles ("Dr. Smith")
 - avoids weak breaks, such as ending a caption on "the / and / of" or starting one with "için / gibi / mı" (English and Turkish rules built in)
-- prefers breaking at sentence ends, commas and pauses
+- prefers breaking at commas and pauses, and **never puts two sentences in one caption**
+- **continuous captions**: each caption stays on screen until the next one starts
+- **no lone one-word captions** in running speech; a single word is only allowed when it is a sentence on its own ("Yes.") or isolated by long pauses
 - splits long captions into two balanced lines
 - creates a caption track on the active sequence, or saves an `.srt`
 

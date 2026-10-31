@@ -45,6 +45,7 @@
       minDuration: d.minDuration, maxDuration: d.maxDuration, pauseSplit: d.pauseSplit,
       closeGapsUnder: d.closeGapsUnder, gapFrames: 2, offset: 0, language: d.language,
       protectNames: d.protectNames, protectNumbers: d.protectNumbers,
+      continuous: d.continuous, splitSentences: d.splitSentences,
       phrases: E.LANGS[d.language].phrases.join('\n'), alignMode: 'sequence', scriptText: ''
     };
   }
@@ -65,6 +66,8 @@
     s.language = $('language').value;
     s.protectNames = $('protectNames').checked;
     s.protectNumbers = $('protectNumbers').checked;
+    s.continuous = $('continuous').checked;
+    s.splitSentences = $('splitSentences').checked;
     s.phrases = $('phrases').value;
     s.alignMode = $('alignMode').value;
     s.scriptText = $('scriptText').value;
@@ -81,9 +84,21 @@
     $('language').value = s.language;
     $('protectNames').checked = !!s.protectNames;
     $('protectNumbers').checked = !!s.protectNumbers;
+    $('continuous').checked = !!s.continuous;
+    $('splitSentences').checked = !!s.splitSentences;
+    updateDisabled();
     $('phrases').value = s.phrases;
     $('alignMode').value = s.alignMode;
     $('scriptText').value = s.scriptText || '';
+  }
+
+  /** Gap settings don't apply when captions are continuous. */
+  function updateDisabled() {
+    var on = $('continuous').checked;
+    ['gapFrames', 'closeGapsUnder'].forEach(function (id) {
+      $(id).disabled = on;
+      $(id).parentNode.classList.toggle('disabled', on);
+    });
   }
 
   function engineOptions(extraOffset, frameDuration) {
@@ -104,6 +119,8 @@
       frameDuration: frameDuration || 0,
       protectNames: s.protectNames,
       protectNumbers: s.protectNumbers,
+      continuous: s.continuous,
+      splitSentences: s.splitSentences,
       phrases: s.phrases.split(/\r?\n/).map(function (l) { return l.trim(); }).filter(Boolean)
     };
   }
@@ -222,7 +239,7 @@
         var flag = document.createElement('span');
         flag.className = 'flag';
         flag.textContent = c.flags.map(function (f) {
-          if (f === 'short') return 'fewer words than the minimum (pause, sentence end or forced break)';
+          if (f === 'short') return 'fewer words than the minimum';
           if (f === 'chars') return 'a line is longer than the character limit';
           if (f.indexOf('long') === 0) return 'more words than the maximum' + f.slice(4);
           return f;
@@ -258,6 +275,7 @@
   }
 
   function refresh() {
+    updateDisabled();
     saveSettings();
     if (!state.timedText) { renderPreview(null); toggleButtons(false); return; }
     try {
