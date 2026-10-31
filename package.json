@@ -1,0 +1,10 @@
+{
+  "name": "premiere-smart-captions",
+  "version": "1.0.0",
+  "description": "Premiere Pro panel that turns a transcript into synchronized, well-split captions.",
+  "private": true,
+  "scripts": {
+    "test": "node --test tests/engine.test.js",
+    "srt": "node tools/make-srt.js"
+  }
+}

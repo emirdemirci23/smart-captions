@@ -1,0 +1,14 @@
+{
+  "version": "1.1.0",
+  "date": "2026-10-31",
+  "notes": "Auto-update from GitHub, SRT encoding fixes",
+  "files": [
+    "index.html",
+    "css/style.css",
+    "js/caption-engine.js",
+    "js/main.js",
+    "js/updater.js",
+    "jsx/host.jsx",
+    "CSXS/manifest.xml"
+  ]
+}

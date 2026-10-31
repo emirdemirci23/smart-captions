@@ -1,0 +1,210 @@
+'use strict';
+const test = require('node:test');
+const assert = require('node:assert/strict');
+const E = require('../js/caption-engine.js');
+
+// Build a fake Whisper-style word list from text: 0.3s per word, 0.6s pause after sentences.
+function fakeWords(text, opts = {}) {
+  let t = opts.start || 0;
+  return text.split(/\s+/).filter(Boolean).map((w) => {
+    const word = { word: ' ' + w, start: +t.toFixed(3), end: +(t + 0.28).toFixed(3) };
+    t += /[.!?]$/.test(w) ? 0.9 : 0.3;
+    return word;
+  });
+}
+const whisperJSON = (text) => JSON.stringify({ segments: [{ text, words: fakeWords(text) }] });
+const capTexts = (res) => res.captions.map((c) => c.text);
+
+test('parses Whisper JSON with leading spaces and continuation tokens', () => {
+  const json = JSON.stringify({ segments: [{ words: [
+    { word: ' Hello', start: 0, end: 0.4 },
+    { word: ',', start: 0.4, end: 0.45 },
+    { word: ' Ste', start: 0.5, end: 0.7 },
+    { word: 'phen', start: 0.7, end: 0.9 },
+    { word: '.', start: 0.9, end: 0.95 },
+  ] }] });
+  const { words, kind } = E.parseTimedTranscript(json);
+  assert.equal(kind, 'words');
+  assert.deepEqual(words.map((w) => w.text), ['Hello,', 'Stephen.']);
+  assert.equal(words[1].start, 0.5);
+  assert.equal(words[1].end, 0.9);
+});
+
+test('detects millisecond timings (AssemblyAI style)', () => {
+  const json = JSON.stringify({ words: [
+    { text: 'One', start: 1000, end: 1300 },
+    { text: 'two', start: 1400, end: 1700 },
+  ] });
+  const { words } = E.parseTimedTranscript(json);
+  assert.equal(words[0].start, 1);
+  assert.equal(words[1].end, 1.7);
+});
+
+test('handles Premiere-style start + duration and punctuation tokens', () => {
+  const json = JSON.stringify({ language: 'en-us', segments: [{ start: 0, duration: 2, words: [
+    { text: 'Good', start: 0.1, duration: 0.3, type: 'word' },
+    { text: 'morning', start: 0.45, duration: 0.4, type: 'word' },
+    { text: '.', start: 0.85, duration: 0, type: 'punctuation' },
+  ] }] });
+  const { words } = E.parseTimedTranscript(json);
+  assert.deepEqual(words.map((w) => w.text), ['Good', 'morning.']);
+  assert.ok(Math.abs(words[1].end - 0.85) < 1e-9);
+});
+
+test('handles AWS Transcribe items', () => {
+  const json = JSON.stringify({ results: { items: [
+    { start_time: '0.1', end_time: '0.4', alternatives: [{ content: 'Hi' }], type: 'pronunciation' },
+    { alternatives: [{ content: '!' }], type: 'punctuation' },
+  ] } });
+  const { words } = E.parseTimedTranscript(json);
+  assert.deepEqual(words.map((w) => w.text), ['Hi!']);
+  assert.equal(words[0].start, 0.1);
+});
+
+test('parses SRT and spreads cue time over words', () => {
+  const srt = '1\n00:00:01,000 --> 00:00:03,000\nHello there world\n\n2\n00:00:04,000 --> 00:00:05,000\nBye.\n';
+  const { words, kind, format } = E.parseTimedTranscript(srt);
+  assert.equal(kind, 'cues');
+  assert.equal(format, 'SRT');
+  assert.equal(words.length, 4);
+  assert.equal(words[0].start, 1);
+  assert.ok(Math.abs(words[2].end - 3) < 1e-9);
+  assert.equal(words[3].start, 4);
+});
+
+test('parses timestamped text lines', () => {
+  const txt = '[00:00:01.000 --> 00:00:02.500] First line here\n[00:00:03.000 --> 00:00:04.000] Second.';
+  const { words } = E.parseTimedTranscript(txt);
+  assert.equal(words.length, 4);
+  assert.equal(words[3].start, 3);
+});
+
+test('rejects plain text without timings', () => {
+  assert.throws(() => E.parseTimedTranscript('just some words'), /No timing information/);
+});
+
+test('every caption respects min/max words when possible', () => {
+  const text = 'So today I want to talk about something that a lot of people ask me about every single week. ' +
+    'It is the question of how to make captions that are easy to read and that never feel rushed or broken. ' +
+    'The answer is simpler than you might think, and it starts with the transcript.';
+  const res = E.generate({ timedText: whisperJSON(text), options: { minWords: 3, maxWords: 6 } });
+  res.captions.forEach((c) => {
+    assert.ok(c.wordCount <= 6, `too long: "${c.text}"`);
+    assert.ok(c.wordCount >= 3, `too short: "${c.text}"`);
+  });
+  // All words preserved, in order.
+  assert.equal(capTexts(res).join(' '), text);
+});
+
+test('keep-together phrases are never split', () => {
+  // With max 4 words, the natural split would land inside "as well as".
+  const text = 'We need paper as well as pens for the class today.';
+  const res = E.generate({ timedText: whisperJSON(text), options: { minWords: 2, maxWords: 4, phrases: ['as well as'] } });
+  assert.ok(capTexts(res).some((t) => /as well as/.test(t)), capTexts(res).join(' | '));
+});
+
+test('custom phrase longer than max words stays together and is flagged', () => {
+  const text = 'This was made by the United States Department of Agriculture in May.';
+  const res = E.generate({ timedText: whisperJSON(text), options: { minWords: 2, maxWords: 3, phrases: ['United States Department of Agriculture'] } });
+  const cap = res.captions.find((c) => /United States Department of Agriculture/.test(c.text));
+  assert.ok(cap, capTexts(res).join(' | '));
+  assert.ok(cap.flags.some((f) => f.startsWith('long')));
+});
+
+test('names and numbers stay together', () => {
+  const text = 'Yesterday I flew to see my friend in New York for about 10 days.';
+  const res = E.generate({ timedText: whisperJSON(text), options: { minWords: 2, maxWords: 4, phrases: [] } });
+  const t = capTexts(res);
+  assert.ok(t.some((x) => /New York/.test(x)), t.join(' | '));
+  assert.ok(t.some((x) => /10 days/.test(x)), t.join(' | '));
+});
+
+test('captions do not end on a weak word like "the"', () => {
+  const text = 'I walked into the old house and then I opened the door to the garden very slowly.';
+  const res = E.generate({ timedText: whisperJSON(text), options: { minWords: 3, maxWords: 5 } });
+  res.captions.slice(0, -1).forEach((c) => {
+    assert.ok(!/\b(the|to|and|I)$/.test(c.text), `ends weakly: "${c.text}"`);
+  });
+});
+
+test('Turkish: caption does not start with a postposition', () => {
+  const text = 'Bugün sizinle yeni bir proje için çok önemli bir konuyu konuşmak istiyorum.';
+  const res = E.generate({ timedText: whisperJSON(text), options: { language: 'tr', minWords: 2, maxWords: 4 } });
+  res.captions.forEach((c) => assert.ok(!/^(için|gibi|kadar)\b/.test(c.text), capTexts(res).join(' | ')));
+  res.captions.slice(0, -1).forEach((c) => assert.ok(!/\b(bir|ve)$/.test(c.text), capTexts(res).join(' | ')));
+});
+
+test('script alignment uses correct words with recognised timings', () => {
+  const asr = 'so to day we are going too talk about the new camera';
+  const script = 'So today, we are going to talk about the new Canon camera.';
+  const res = E.generate({ timedText: whisperJSON(asr), scriptText: script, options: { minWords: 2, maxWords: 5 } });
+  assert.equal(capTexts(res).join(' '), script);
+  assert.ok(res.alignment.ratio > 0.6);
+  const words = E.prepareWords(whisperJSON(asr), script).words;
+  const talk = words.find((w) => w.text === 'talk');
+  assert.equal(talk.start, fakeWords(asr)[7].start);
+  // Times must be monotonic.
+  for (let i = 1; i < words.length; i++) assert.ok(words[i].start >= words[i - 1].start);
+});
+
+test('"|" in the script forces a break', () => {
+  const asr = 'one two three four five six';
+  const res = E.generate({ timedText: whisperJSON(asr), scriptText: 'one two | three four five six', options: { minWords: 3, maxWords: 6 } });
+  assert.equal(res.captions[0].text, 'one two');
+});
+
+test('two lines are balanced and respect max chars', () => {
+  const text = 'This sentence is definitely long enough to need two separate lines on screen.';
+  const res = E.generate({ timedText: whisperJSON(text), options: { minWords: 12, maxWords: 14, maxCharsPerLine: 42, maxLines: 2 } });
+  assert.equal(res.captions.length, 1);
+  const lines = res.captions[0].lines;
+  assert.equal(lines.length, 2);
+  lines.forEach((l) => assert.ok(l.length <= 42, l));
+});
+
+test('timing: no overlaps, min gap kept, offset applied', () => {
+  const text = 'First caption here now. Second caption right after. Third one comes later.';
+  const res = E.generate({ timedText: whisperJSON(text), options: { minWords: 3, maxWords: 4, offset: 10, minGap: 0.1 } });
+  for (let i = 1; i < res.captions.length; i++) {
+    assert.ok(res.captions[i].start >= res.captions[i - 1].end + 0.099, 'gap kept');
+  }
+  assert.ok(res.captions[0].start >= 10);
+});
+
+test('SRT output format', () => {
+  const caps = [{ start: 1.5, end: 3.25, lines: ['Hello', 'world'] }, { start: 3661.001, end: 3662, lines: ['Bye'] }];
+  assert.equal(E.toSRT(caps, '\n'),
+    '1\n00:00:01,500 --> 00:00:03,250\nHello\nworld\n\n2\n01:01:01,001 --> 01:01:02,000\nBye\n');
+});
+
+test('large transcript is fast', () => {
+  const sentence = 'This is a reasonably normal sentence that people might say on camera, right? ';
+  const text = sentence.repeat(600); // ~8,000 words
+  const t0 = Date.now();
+  const res = E.generate({ timedText: whisperJSON(text), scriptText: text, options: {} });
+  assert.ok(res.captions.length > 500);
+  assert.ok(Date.now() - t0 < 10000, 'took ' + (Date.now() - t0) + 'ms');
+});
+
+test('SRT position tags and VTT cue settings are not treated as text', () => {
+  const srt = '1\n00:00:01,000 --> 00:00:03,500 X1:100 X2:500 Y1:10 Y2:50\nHello there\n';
+  assert.equal(E.parseTimedTranscript(srt).words.map((w) => w.text).join(' '), 'Hello there');
+  const vtt = 'WEBVTT\n\nintro\n00:01.000 --> 00:03.500 align:start position:10%\nHi\n2024\n';
+  assert.equal(E.parseTimedTranscript(vtt).words.map((w) => w.text).join(' '), 'Hi 2024');
+});
+
+test('decodes UTF-8, UTF-16 and Turkish Windows-1254 files', () => {
+  const text = '1\r\n00:00:01,000 --> 00:00:02,000\r\nArkadaşlar, bugün çekiyoruz. İyi ğ\r\n';
+  const utf16 = Buffer.concat([Buffer.from([0xFF, 0xFE]), Buffer.from(text, 'utf16le')]);
+  const utf16NoBom = Buffer.from(text, 'utf16le');
+  const utf16be = Buffer.from(Buffer.from(text, 'utf16le')).swap16();
+  const utf8bom = Buffer.concat([Buffer.from([0xEF, 0xBB, 0xBF]), Buffer.from(text)]);
+  const cp1254 = Buffer.from(text.replace(/ş/g, '\xfe').replace(/ü/g, '\xfc').replace(/ç/g, '\xe7')
+    .replace(/İ/g, '\xdd').replace(/ğ/g, '\xf0'), 'latin1');
+  for (const [name, buf] of Object.entries({ utf16, utf16NoBom, utf8bom, cp1254, utf8: Buffer.from(text) })) {
+    assert.equal(E.decodeBytes(new Uint8Array(buf)), text, name);
+  }
+  const be = E.decodeBytes(new Uint8Array(Buffer.concat([Buffer.from([0xFE, 0xFF]), utf16be])));
+  assert.equal(be, text);
+  assert.equal(E.parseTimedTranscript(E.decodeBytes(new Uint8Array(utf16))).words.length, 5);
+});
