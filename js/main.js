@@ -218,14 +218,16 @@
     }
     var st = res.stats;
     $('stats').textContent = st.captions + ' captions · avg ' + st.avgWords.toFixed(1) + ' words' +
-      (st.flagged ? ' · ' + st.flagged + ' flagged' : '');
+      (st.flagged ? ' · ' + st.flagged + ' flagged' : '') +
+      (st.estimated ? ' · ' + st.estimated + ' estimated (≈)' : '');
     var frag = document.createDocumentFragment();
     res.captions.forEach(function (c) {
       var li = document.createElement('li');
       if (c.flags.length) li.className = 'flagged';
       var time = document.createElement('span');
       time.className = 'time';
-      time.textContent = fmtTime(c.start) + '\n' + fmtTime(c.end);
+      time.textContent = (c.estimatedStart ? '≈' : '') + fmtTime(c.start) + '\n' + fmtTime(c.end);
+      if (c.estimatedStart) time.title = 'Estimated: this caption starts in the middle of a line of the source file.';
       time.style.whiteSpace = 'pre';
       var text = document.createElement('span');
       text.className = 'text';
@@ -264,7 +266,12 @@
     var p = state.prepared;
     var msg = p.format + ' · ' + p.words.length + ' words';
     var kind = '';
-    if (p.kind === 'cues') msg += ' · word times estimated from segment timings';
+    if (p.kind === 'cues') {
+      kind = 'warn';
+      msg += '\nThis file only has a time per line, not per word. Captions that start in the middle of a line ' +
+        'have estimated times (marked ≈). For exact sync, load a transcript with word timings: in Premiere, ' +
+        'Text panel → Transcript → … menu → Export → JSON, then choose that file here.';
+    }
     if (p.alignment) {
       var pct = Math.round(p.alignment.ratio * 100);
       msg += ' · script matched ' + pct + '%';

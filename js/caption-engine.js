@@ -148,6 +148,22 @@
 
   function wordWeight(text) { return Math.max(2, norm(text).length + 1); }
 
+  /**
+   * Relative speaking time of a word inside a subtitle line: syllables (vowel
+   * groups; digits count as spoken numbers) plus a short pause after punctuation.
+   */
+  function speechWeight(text, isLast) {
+    var n = norm(text);
+    var digits = (n.match(/\d/g) || []).length;
+    var syll = (n.replace(/\d/g, '').match(/[aeiouy]+/g) || []).length + digits * 1.3;
+    var w = Math.max(1, syll) + 0.3;
+    if (!isLast) {
+      if (SENT_END_RE.test(text)) w += 1.6;
+      else if (CLAUSE_RE.test(text)) w += 0.9;
+    }
+    return w;
+  }
+
   function isCap(text) {
     var m = /\p{L}/u.exec(text);
     if (!m) return false;
@@ -166,9 +182,14 @@
 
   function hasTrailingPunct(text) { return TRAILING_PUNCT_RE.test(text); }
 
+  var tcFps = 30; // frame rate assumed for HH:MM:SS:FF timecodes (set per file)
+
   function parseTimestamp(s) {
     s = String(s).trim();
     var m;
+    if ((m = /^(\d+):(\d{2}):(\d{2})[:;](\d{2,3})$/.exec(s))) {
+      return (+m[1]) * 3600 + (+m[2]) * 60 + (+m[3]) + (+m[4]) / tcFps;
+    }
     if (/^-?\d+(\.\d+)?$/.test(s)) return parseFloat(s);
     if ((m = /^(-?\d+(?:\.\d+)?)s$/.exec(s))) return parseFloat(m[1]); // "1.5s"
     m = /^(?:(\d+):)?(\d{1,2}):(\d{1,2})(?:[.,](\d+))?$/.exec(s);
@@ -413,14 +434,17 @@
         .replace(/^\s*(>>|-)\s*/, '');   // speaker change markers
       var toks = tokenize(text);
       if (!toks.length) return;
-      var total = 0;
-      toks.forEach(function (t) { total += wordWeight(t.text); });
+      var weights = toks.map(function (t, k) { return speechWeight(t.text, k === toks.length - 1); });
+      var total = weights.reduce(function (a, b) { return a + b; }, 0);
       var span = Math.max(0, c.end - c.start), t0 = c.start;
-      toks.forEach(function (t) {
-        var d = span * wordWeight(t.text) / total;
-        words.push({ text: t.text, start: t0, end: t0 + d });
+      toks.forEach(function (t, k) {
+        var d = span * weights[k] / total;
+        // Time after a word's punctuation is a pause, not part of the word.
+        var pause = (k < toks.length - 1 && /[^\p{L}\p{N}]$/u.test(t.text)) ? d * 0.35 : 0;
+        words.push({ text: t.text, start: t0, end: t0 + d - pause, cueStart: k === 0, cueEnd: k === toks.length - 1 });
         t0 += d;
       });
+      words[words.length - 1].end = c.end;   // exact cue end
     });
     return words;
   }
@@ -478,6 +502,17 @@
     var text = String(input).replace(/^﻿/, '');
     var trimmed = text.trim();
     if (!trimmed) throw new Error('The transcript file is empty.');
+    var bad = (trimmed.slice(0, 4000).match(/[\u0000-\u0008\u000E-\u001F\uFFFD]/g) || []).length;
+    if (bad > Math.min(4000, trimmed.length) * 0.02) {
+      throw new Error('This is a binary file (for example Premiere\'s .prtranscript), which can\'t be read. ' +
+        'In Premiere export the transcript as JSON instead, or use an SRT/VTT file.');
+    }
+    var tcs = trimmed.match(/\b\d{2}:\d{2}:\d{2}[:;](\d{2})\b/g);
+    if (tcs) {
+      var maxF = 0;
+      tcs.forEach(function (tc) { maxF = Math.max(maxF, +tc.slice(-2)); });
+      tcFps = maxF < 24 ? 24 : maxF < 25 ? 25 : maxF < 30 ? 30 : maxF < 50 ? 50 : 60;
+    }
 
     var json = null;
     if (trimmed[0] === '{' || trimmed[0] === '[') {
@@ -632,6 +667,8 @@
       var opHere = (i === 0) ? 2 : P[i * width + (j - lo(i))];
       if (opHere === 0) {
         out[i - 1].start = timedWords[j - 1].start;
+        out[i - 1].cueStart = timedWords[j - 1].cueStart;
+        out[i - 1].cueEnd = timedWords[j - 1].cueEnd;
         out[i - 1].end = timedWords[j - 1].end;
         var sim = similarity(a[i - 1], b[j - 1]);
         if (sim === 1) exact++; else if (sim >= 0.5) fuzzy++;
@@ -665,6 +702,7 @@
     var normed = words.map(function (w) { return norm(w.text); });
     var noEnd = toSet(lang.noEnd), noStart = toSet(lang.noStart);
     var b, i;
+    var hasCues = words.some(function (w) { return w.cueEnd; });
 
     for (b = 1; b < n; b++) {
       var pw = words[b - 1].text;
@@ -741,7 +779,8 @@
       var punct = hasTrailingPunct(prevW.text);
       if (!punct && noEnd[normed[b - 1]]) c += 30;       // "... the | house"
       if (!punct && noStart[normed[b]]) c += 30;         // "ev | için"
-      cost[b] = c;
+      if (hasCues) c += words[b - 1].cueEnd ? -6 : 14;   // exact line times vs estimated
+      cost[b] = Math.max(0, c);
     }
 
     return { forbidden: forbidden, forced: forced, cost: cost, sentEnd: sentEnd, edge: edge, reason: reason };
@@ -896,7 +935,10 @@
     var o = normalizeOptions(options);
     var lang = LANGS[o.language];
     // Work on copies so cached words are never mutated.
-    var ws = words.map(function (w) { return { text: w.text, start: w.start, end: w.end, breakAfter: w.breakAfter }; });
+    var ws = words.map(function (w) {
+      return { text: w.text, start: w.start, end: w.end, breakAfter: w.breakAfter, cueStart: w.cueStart, cueEnd: w.cueEnd };
+    });
+    var hasCues = ws.some(function (w) { return w.cueEnd; });
     var B = buildBoundaries(ws, o, lang);
     var caps = segment(ws, B, o).map(function (sp) {
       var cw = ws.slice(sp[0], sp[1]);
@@ -909,7 +951,10 @@
         flags.push('long' + (why.length ? ' (kept together: ' + why.join(', ') + ')' : ''));
       }
       lines.forEach(function (l) { if (l.length > o.maxCharsPerLine && flags.indexOf('chars') < 0) flags.push('chars'); });
-      return { words: cw, wordCount: cw.length, lines: lines, text: lines.join(' '), flags: flags };
+      return {
+        words: cw, wordCount: cw.length, lines: lines, text: lines.join(' '), flags: flags,
+        estimatedStart: hasCues && !cw[0].cueStart
+      };
     });
     caps = finalizeTiming(caps, o);
     caps.forEach(function (c, i) { c.index = i + 1; });
@@ -922,7 +967,8 @@
         captions: caps.length,
         words: total,
         avgWords: caps.length ? total / caps.length : 0,
-        flagged: caps.filter(function (c) { return c.flags.length; }).length
+        flagged: caps.filter(function (c) { return c.flags.length; }).length,
+        estimated: caps.filter(function (c) { return c.estimatedStart; }).length
       }
     };
   }

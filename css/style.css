@@ -89,7 +89,7 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--a
 .actions { display: flex; gap: 8px; margin: 10px 0 6px; }
 .actions .primary { flex: 1; }
 
-.info, .status { min-height: 16px; line-height: 1.45; }
+.info, .status { min-height: 16px; line-height: 1.45; white-space: pre-line; }
 .info.warn, .status.warn { color: var(--warn); }
 .info.error, .status.error { color: var(--error); }
 .status.ok { color: var(--ok); }

@@ -21,6 +21,15 @@ A Premiere Pro panel that turns your transcript into **synchronized captions**. 
    - `|` in the script = forced caption break
 3. **Splitting.** Every gap between two words gets a cost (sentence end = cheap, after "the" = expensive, inside a protected phrase = impossible). A dynamic-programming pass picks the cheapest set of breaks while respecting min/max words, characters per line, max duration and pauses. If a protected phrase is longer than the max, it stays whole and the caption is flagged in the preview.
 
+## Getting exact sync
+
+Captions are only as exact as the timings in the file you load:
+
+- **Word-level transcript (exact):** every caption starts on the exact time its first word is spoken (rounded to the nearest frame, since Premiere places captions on frames). Get one from Premiere's own Speech to Text: transcribe in the Text panel, then **Transcript → … menu → Export → JSON**. If the transcript has wrong words, paste the corrected script; your words get Premiere's timings.
+  - Transcribed the **sequence** → set Placement to *Sequence start*.
+  - Transcribed a **clip** (Source Monitor) → select that clip in the timeline and set Placement to *Selected clip's media start*.
+- **SRT / VTT (partly estimated):** these only have one time per line. Captions that start where a line starts are exact; captions that start in the middle of a line have estimated times and are marked **≈** in the preview.
+
 ## Install (macOS / Windows)
 
 The panel is a CEP extension. It is unsigned, so Premiere's debug mode must be on; the install scripts do that for you.

@@ -262,3 +262,41 @@ test('a word isolated by long pauses may stand alone', () => {
   assert.deepEqual(capTexts(res), ['Okay', 'so today we start']);
   assert.deepEqual(res.captions[0].flags, []);
 });
+
+test('SRT input: captions prefer the exact line boundaries and mark estimated starts', () => {
+  const srt = '1\n00:00:01,000 --> 00:00:02,600\nThis is the first line.\n\n' +
+              '2\n00:00:03,000 --> 00:00:04,200\nAnd this is line two.\n\n' +
+              '3\n00:00:04,500 --> 00:00:08,000\nA much longer third line that will have to be split somewhere.\n';
+  const res = E.generate({ timedText: srt, options: { minWords: 3, maxWords: 6 } });
+  assert.equal(res.captions[0].start, 1);
+  assert.equal(res.captions[0].end, 3);          // continuous: ends when line 2 starts
+  assert.equal(res.captions[1].start, 3);
+  assert.equal(res.captions[2].start, 4.5);
+  assert.equal(res.captions[0].estimatedStart, false);
+  const split = res.captions.slice(3);
+  assert.ok(split.length >= 1 && split.every((c) => c.estimatedStart));
+  assert.equal(res.captions[res.captions.length - 1].end, 8);
+});
+
+test('word-level JSON gives exact word start times', () => {
+  const words = fakeWords('Hello there my friend. This is exact timing for every single word here.');
+  const res = E.generate({ timedText: JSON.stringify({ words }), options: { minWords: 2, maxWords: 4 } });
+  let idx = 0;
+  for (const c of res.captions) {
+    assert.equal(c.start, words[idx].start);
+    assert.equal(c.estimatedStart, false);
+    idx += c.wordCount;
+  }
+});
+
+test('reads HH:MM:SS:FF timecodes and rejects binary files', () => {
+  const json = JSON.stringify({ segments: [{ words: [
+    { text: 'One', start: '00:00:01:00', end: '00:00:01:12' },
+    { text: 'two', start: '00:00:01:13', end: '00:00:02:00' },
+    { text: 'three', start: '00:00:02:05', end: '00:00:02:24' },
+  ] }] });
+  const { words } = E.parseTimedTranscript(json);
+  assert.equal(words[0].start, 1);
+  assert.ok(Math.abs(words[0].end - 1.48) < 1e-9);   // 25 fps (frame 24 seen)
+  assert.throws(() => E.parseTimedTranscript('\u0000\u0001\u0002PRT\u0000\u0000binary\u0003\u0004'.repeat(20)), /binary file/);
+});
