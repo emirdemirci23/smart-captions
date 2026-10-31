@@ -1,7 +1,7 @@
 {
-  "version": "1.3.2",
+  "version": "1.4.0",
   "date": "2026-10-31",
-  "notes": "Time the last words even when the audio file ends slightly early",
+  "notes": "Auto-detect language; start captions on stressed syllables",
   "files": [
     "index.html",
     "css/style.css",

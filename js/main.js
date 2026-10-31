@@ -48,7 +48,7 @@
       closeGapsUnder: d.closeGapsUnder, gapFrames: 2, offset: 0, language: d.language,
       protectNames: d.protectNames, protectNumbers: d.protectNumbers,
       continuous: d.continuous, splitSentences: d.splitSentences,
-      phrases: E.LANGS[d.language].phrases.join('\n'), alignMode: 'sequence', scriptText: ''
+      phrases: '', alignMode: 'sequence', scriptText: ''
     };
   }
 
@@ -57,6 +57,8 @@
     try {
       var saved = JSON.parse(localStorage.getItem(STORAGE_KEY) || '{}');
       Object.keys(saved).forEach(function (k) { if (k in s) s[k] = saved[k]; });
+      // v1.4: language is detected automatically; switch older saved settings to Auto once.
+      if (!saved.autoLanguage) s.language = 'auto';
     } catch (e) { /* ignore */ }
     return s;
   }
@@ -77,7 +79,11 @@
   }
 
   function saveSettings() {
-    try { localStorage.setItem(STORAGE_KEY, JSON.stringify(readSettings())); } catch (e) { /* ignore */ }
+    try {
+      var data = readSettings();
+      data.autoLanguage = true;
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
+    } catch (e) { /* ignore */ }
   }
 
   function applySettings(s) {
@@ -282,7 +288,8 @@
     $('stats').textContent = st.captions + ' captions · avg ' + st.avgWords.toFixed(1) + ' words' +
       (st.flagged ? ' · ' + st.flagged + ' flagged' : '') +
       (st.estimated ? ' · ' + st.estimated + ' estimated (≈)' : '') +
-      (st.audioSynced ? ' · ' + st.audioAnchored + '/' + st.captions + ' starts on a clear sound (♪)' : '');
+      (st.audioSynced ? ' · ' + st.audioAnchored + '/' + st.captions + ' starts on a clear sound (♪)' : '') +
+      (res.languageDetected ? ' · ' + E.LANGS[res.language].name + ' rules (auto)' : '');
     var frag = document.createDocumentFragment();
     res.captions.forEach(function (c) {
       var li = document.createElement('li');
@@ -462,6 +469,9 @@
 
   function init() {
     var langSel = $('language');
+    var autoOpt = document.createElement('option');
+    autoOpt.value = 'auto'; autoOpt.textContent = 'Auto-detect';
+    langSel.appendChild(autoOpt);
     Object.keys(E.LANGS).forEach(function (k) {
       var o = document.createElement('option');
       o.value = k; o.textContent = E.LANGS[k].name;
@@ -507,7 +517,8 @@
     });
 
     $('resetPhrases').addEventListener('click', function () {
-      $('phrases').value = E.LANGS[$('language').value].phrases.join('\n');
+      var l = E.LANGS[$('language').value];
+      $('phrases').value = l ? l.phrases.join('\n') : '';
       refresh();
     });
 
@@ -515,7 +526,8 @@
       // Swap the phrase list if it is still the previous language's default.
       var current = $('phrases').value.trim();
       var isDefault = Object.keys(E.LANGS).some(function (k) { return E.LANGS[k].phrases.join('\n') === current; });
-      if (isDefault || !current) $('phrases').value = E.LANGS[$('language').value].phrases.join('\n');
+      var lang = E.LANGS[$('language').value];
+      if (isDefault || !current) $('phrases').value = lang ? lang.phrases.join('\n') : '';
       refresh();
     });
 

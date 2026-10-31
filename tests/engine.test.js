@@ -391,3 +391,39 @@ test('words at the very end are timed even if the audio stops slightly early', (
   const p = E.prepareWords(JSON.stringify({ words: truth }), '', env, 'en');
   assert.equal(p.audioWords, p.words.length);
 });
+
+test('language is detected automatically', () => {
+  const toW = (t) => t.split(/\s+/).map((x) => ({ text: x }));
+  assert.equal(E.detectLanguage(toW(sampleText)), 'en');
+  assert.equal(E.detectLanguage(toW('Ben de bu konuda çok düşündüm ama sonra karar verdim, bence daha iyi olur.')), 'tr');
+  assert.equal(E.detectLanguage(toW('Hola a todos, bienvenidos al canal. Hoy vamos a hablar de subtítulos.')), 'other');
+});
+
+test('auto language applies English rules to English text (no captions ending on "of", "the"...)', () => {
+  const res = E.generate({ timedText: whisperJSON(sampleText), options: { minWords: 3, maxWords: 6, language: 'auto', phrases: ['teşekkür ederim'] } });
+  assert.equal(res.language, 'en');
+  assert.ok(res.languageDetected);
+  res.captions.forEach((c) => assert.ok(!/\b(of|the|to|a|an|and|for|with|at)$/i.test(c.text), `ends weakly: "${c.text}"`));
+});
+
+test('captions prefer to start on stressed (louder) words', () => {
+  const text = 'we are going to look at many different examples today and every single one shows something new';
+  const truth = S.makeTruth(text, 5, 'en');
+  let hits = 0;
+  const targets = [9, 10, 14];   // "today", "and", "shows": positions where grammar allows a split
+  for (const target of targets) {
+    const a = S.renderSpeech(truth, 9);
+    const w = truth[target];
+    const i0 = Math.floor(w.start * a.sampleRate), i1 = Math.floor(Math.min(w.end, w.start + 0.3) * a.sampleRate);
+    for (let i = i0; i < i1; i++) a.samples[i] *= 3.5;
+    const res = E.generate({ timedText: JSON.stringify({ words: truth }), audio: E.analyzeAudio(a.samples, a.sampleRate), options: { minWords: 3, maxWords: 6 } });
+    if (res.captions.some((c) => c.text.startsWith(w.text + ' '))) hits++;
+  }
+  assert.equal(hits, targets.length, `captions started on the stressed word in ${hits} of ${targets.length} cases`);
+  // Grammar still wins: a stressed "many" never leaves a caption ending on "at".
+  const a = S.renderSpeech(truth, 9);
+  const w = truth[6];
+  for (let i = Math.floor(w.start * a.sampleRate); i < Math.floor((w.start + 0.3) * a.sampleRate); i++) a.samples[i] *= 3.5;
+  const res = E.generate({ timedText: JSON.stringify({ words: truth }), audio: E.analyzeAudio(a.samples, a.sampleRate), options: { minWords: 3, maxWords: 6 } });
+  res.captions.forEach((c) => assert.ok(!/\b(at|to|and)$/.test(c.text), c.text));
+});

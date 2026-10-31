@@ -31,7 +31,7 @@
   // ---------------------------------------------------------------------------
 
   var DEFAULTS = {
-    language: 'en',
+    language: 'auto',      // 'auto' detects English / Turkish from the transcript
     minWords: 3,
     maxWords: 8,
     maxCharsPerLine: 42,
@@ -66,7 +66,7 @@
         "it's", "that's", "there's", "i've", "we've", "i'll", "we'll", "i'd",
         'mr', 'mrs', 'ms', 'dr', 'just', 'some', 'any', 'every', 'each', 'no',
         'how', 'what', 'when', 'where', 'why', 'who', 'which', 'whose', 'too', 'more',
-        'most', 'less', 'least'],
+        'most', 'less', 'least', 'many', 'several', 'few', 'both', 'another', 'other'],
       // A caption should not START with these (unless the previous word ends
       // with punctuation).
       noStart: [],
@@ -108,6 +108,26 @@
     },
     other: { name: 'Other (no grammar rules)', noEnd: [], noStart: [], phrases: [] }
   };
+
+  // Frequent words used to recognise the language of a transcript.
+  var LANG_MARKERS = {
+    en: ['the', 'and', 'of', 'to', 'is', 'that', 'you', 'it', 'for', 'this', 'with', 'what', 'are', 'was', 'have', 'they'],
+    tr: ['ve', 'bir', 'bu', 'icin', 'cok', 'ama', 'gibi', 'var', 'yok', 'ben', 'sen', 'daha', 'kadar', 'olarak', 'diye', 'degil', 'sonra']
+  };
+
+  /** 'en', 'tr' or 'other', from how often each language's common words appear. */
+  function detectLanguage(words) {
+    var sets = {}, counts = {}, k;
+    for (k in LANG_MARKERS) { sets[k] = toSet(LANG_MARKERS[k]); counts[k] = 0; }
+    words.forEach(function (w) {
+      var n = norm(w.text);
+      for (k in sets) if (sets[k][n]) counts[k]++;
+    });
+    if (/[ğışİĞŞ]/.test(words.map(function (w) { return w.text; }).join(' '))) counts.tr += words.length * 0.05;
+    var best = 'other', bestC = words.length * 0.06;   // need at least ~6% marker words
+    for (k in counts) if (counts[k] > bestC) { bestC = counts[k]; best = k; }
+    return best;
+  }
 
   var TITLES = toSet(['mr', 'mrs', 'ms', 'dr', 'prof', 'st', 'mt', 'sr', 'jr', 'sgt', 'capt', 'gen']);
 
@@ -682,6 +702,7 @@
         out[i - 1].audio = timedWords[j - 1].audio;
         out[i - 1].anchored = timedWords[j - 1].anchored;
         out[i - 1].afterPause = timedWords[j - 1].afterPause;
+        out[i - 1].stress = timedWords[j - 1].stress;
         out[i - 1].end = timedWords[j - 1].end;
         var sim = similarity(a[i - 1], b[j - 1]);
         if (sim === 1) exact++; else if (sim >= 0.5) fuzzy++;
@@ -795,6 +816,8 @@
       if (hasCues) c += words[b - 1].cueEnd ? -6 : 14;   // exact line times vs estimated
       // With audio, a caption that starts right after a pause has an unambiguous start.
       if (nextW.audio && prevW.audio && !words[b - 1].cueEnd) c += gap >= 0.06 ? -4 : AUDIO_NO_PAUSE;
+      // Start captions on stressed syllables, not on unstressed ones ("of", "the").
+      if (typeof nextW.stress === 'number') c -= SYNC.STRESS * Math.max(-1, Math.min(1, nextW.stress / 6));
       // Prefer starting captions on words whose start was measured in the audio.
       if (nextW.audio && !nextW.anchored) c += SYNC.UNANCHORED;
       // Inside a subtitle line, only a start right after silence is certain.
@@ -1028,6 +1051,14 @@
         var fb = Math.max(0, Math.min(frames, Math.round(b / hopSec - ENV_WIN / 2)));
         return fb > fa ? (activeSum[fb] - activeSum[fa]) * hopSec : 0;
       },
+      // loudest moment between two times (dB)
+      peakDb: function (a, b) {
+        var fa = Math.max(0, Math.round(a / hopSec - ENV_WIN / 2));
+        var fb = Math.min(frames - 1, Math.round(b / hopSec - ENV_WIN / 2));
+        var mx = -Infinity;
+        for (var q = fa; q <= fb; q++) if (sm[q] > mx) mx = sm[q];
+        return mx;
+      },
       // last moment of speech before time b (but not before a)
       speechEndBefore: function (a, b) {
         var fa = Math.max(0, Math.round(a / hopSec - ENV_WIN / 2));
@@ -1052,7 +1083,7 @@
    * without a dip), so that word lengths match their syllable counts and word
    * starts fall on real rises in the sound. Dynamic programming, optimal.
    */
-  var SYNC = { ALPHA: 6.0, BETA: 0.6, GAMMA: 0.7, SIGMA0: 0.12, SIGMA_LINE: 0.1, SIGMA_WORD: 0.1, UNANCHORED: 15, PAUSE_BONUS: 2, MIDLINE_UNSURE: 12 };
+  var SYNC = { ALPHA: 6.0, BETA: 0.6, GAMMA: 0.7, SIGMA0: 0.12, SIGMA_LINE: 0.1, SIGMA_WORD: 0.1, UNANCHORED: 15, PAUSE_BONUS: 2, MIDLINE_UNSURE: 12, STRESS: 10 };
 
   /**
    * `priors[k]` is where word k is expected to start (transcript time or the
@@ -1145,6 +1176,25 @@
       ws[k].end = Math.max(ws[k].start + 0.02, Math.min(nextStart, env.speechEndBefore(ws[k].start, nextStart)));
     }
     return true;
+  }
+
+  /**
+   * Stress of each word's first syllable: how much louder it is (dB) than the
+   * words around it (±2 s). Stressed syllables are where captions read best.
+   */
+  function measureStress(words, env) {
+    var peaks = words.map(function (w) {
+      var end = Math.min(w.end, w.start + 0.25);
+      return end > w.start ? env.peakDb(w.start, end) : -Infinity;
+    });
+    var lo = 0, hi = 0;
+    words.forEach(function (w, i) {
+      while (words[lo].start < w.start - 2) lo++;
+      while (hi < words.length && words[hi].start <= w.start + 2) hi++;
+      var around = peaks.slice(lo, hi).filter(isFinite);
+      if (!isFinite(peaks[i]) || around.length < 3) return;
+      w.stress = peaks[i] - median(around);
+    });
   }
 
   /**
@@ -1333,8 +1383,8 @@
     o.protectNumbers = !!o.protectNumbers;
     o.continuous = !!o.continuous;
     o.splitSentences = !!o.splitSentences;
-    if (!LANGS[o.language]) o.language = 'other';
-    if (!Array.isArray(o.phrases)) o.phrases = LANGS[o.language].phrases.slice();
+    if (o.language !== 'auto' && !LANGS[o.language]) o.language = 'other';
+    if (!Array.isArray(o.phrases)) o.phrases = o.language === 'auto' ? null : LANGS[o.language].phrases.slice();
     return o;
   }
 
@@ -1343,11 +1393,13 @@
     var timed = parseTimedTranscript(timedText);
     var result = { words: timed.words, format: timed.format, kind: timed.kind, alignment: null, audioWords: 0 };
     if (audioEnv) {
+      if (!language || language === 'auto') language = detectLanguage(timed.words);
       var off = detectAudioOffset(timed.words, audioEnv);
       if (off.offset) timed.words.forEach(function (w) { w.start += off.offset; w.end += off.offset; });
       result.audioOffset = off.offset;
       result.audioWords = refineWithAudio(timed.words, audioEnv, language || 'other');
       result.audioAnchored = timed.words.filter(function (w) { return w.anchored; }).length;
+      measureStress(timed.words, audioEnv);
       result.wordsAfterAudio = timed.words.filter(function (w) { return w.start > audioEnv.duration; }).length;
       var last = timed.words[timed.words.length - 1];
       result.audioTooShort = last.end > audioEnv.duration + 1;
@@ -1364,10 +1416,19 @@
   /** Build captions from timed words. */
   function buildCaptions(words, options) {
     var o = normalizeOptions(options);
+    var detected = null;
+    if (o.language === 'auto') {
+      detected = detectLanguage(words);
+      o.language = detected;
+      // Your own phrases plus the detected language's defaults.
+      var merged = (o.phrases || []).slice();
+      LANGS[detected].phrases.forEach(function (ph) { if (merged.indexOf(ph) < 0) merged.push(ph); });
+      o.phrases = merged;
+    }
     var lang = LANGS[o.language];
     // Work on copies so cached words are never mutated.
     var ws = words.map(function (w) {
-      return { text: w.text, start: w.start, end: w.end, breakAfter: w.breakAfter, cueStart: w.cueStart, cueEnd: w.cueEnd, audio: w.audio, anchored: w.anchored, afterPause: w.afterPause };
+      return { text: w.text, start: w.start, end: w.end, breakAfter: w.breakAfter, cueStart: w.cueStart, cueEnd: w.cueEnd, audio: w.audio, anchored: w.anchored, afterPause: w.afterPause, stress: w.stress };
     });
     var hasCues = ws.some(function (w) { return w.cueEnd; });
     var B = buildBoundaries(ws, o, lang);
@@ -1396,6 +1457,8 @@
     return {
       captions: caps,
       options: o,
+      language: o.language,
+      languageDetected: detected !== null,
       stats: {
         captions: caps.length,
         words: total,
@@ -1444,6 +1507,7 @@
     refineWithAudio: refineWithAudio,
     decodeWav: decodeWav,
     countSyllables: countSyllables,
+    detectLanguage: detectLanguage,
     SYNC: SYNC,
     parseTimedTranscript: parseTimedTranscript,
     parseScript: parseScript,
