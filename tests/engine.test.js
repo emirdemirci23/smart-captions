@@ -119,9 +119,9 @@ test('names and numbers stay together', () => {
   assert.ok(t.some((x) => /10 days/.test(x)), t.join(' | '));
 });
 
-test('captions do not end on a weak word like "the"', () => {
+test('with "avoid weak words" on, captions do not end on a weak word like "the"', () => {
   const text = 'I walked into the old house and then I opened the door to the garden very slowly.';
-  const res = E.generate({ timedText: whisperJSON(text), options: { minWords: 3, maxWords: 5 } });
+  const res = E.generate({ timedText: whisperJSON(text), options: { minWords: 3, maxWords: 5, avoidWeakEdges: true } });
   res.captions.slice(0, -1).forEach((c) => {
     assert.ok(!/\b(the|to|and|I)$/.test(c.text), `ends weakly: "${c.text}"`);
   });
@@ -129,7 +129,7 @@ test('captions do not end on a weak word like "the"', () => {
 
 test('Turkish: caption does not start with a postposition', () => {
   const text = 'Bugün sizinle yeni bir proje için çok önemli bir konuyu konuşmak istiyorum.';
-  const res = E.generate({ timedText: whisperJSON(text), options: { language: 'tr', minWords: 2, maxWords: 4 } });
+  const res = E.generate({ timedText: whisperJSON(text), options: { language: 'tr', minWords: 2, maxWords: 4, avoidWeakEdges: true } });
   res.captions.forEach((c) => assert.ok(!/^(için|gibi|kadar)\b/.test(c.text), capTexts(res).join(' | ')));
   res.captions.slice(0, -1).forEach((c) => assert.ok(!/\b(bir|ve)$/.test(c.text), capTexts(res).join(' | ')));
 });
@@ -400,7 +400,7 @@ test('language is detected automatically', () => {
 });
 
 test('auto language applies English rules to English text (no captions ending on "of", "the"...)', () => {
-  const res = E.generate({ timedText: whisperJSON(sampleText), options: { minWords: 3, maxWords: 6, language: 'auto', phrases: ['teşekkür ederim'] } });
+  const res = E.generate({ timedText: whisperJSON(sampleText), options: { minWords: 3, maxWords: 6, language: 'auto', phrases: ['teşekkür ederim'], avoidWeakEdges: true } });
   assert.equal(res.language, 'en');
   assert.ok(res.languageDetected);
   res.captions.forEach((c) => assert.ok(!/\b(of|the|to|a|an|and|for|with|at)$/i.test(c.text), `ends weakly: "${c.text}"`));
@@ -420,10 +420,37 @@ test('captions prefer to start on stressed (louder) words', () => {
     if (res.captions.some((c) => c.text.startsWith(w.text + ' '))) hits++;
   }
   assert.equal(hits, targets.length, `captions started on the stressed word in ${hits} of ${targets.length} cases`);
-  // Grammar still wins: a stressed "many" never leaves a caption ending on "at".
+  // A stressed "many" after "at": by default stress wins (captions may end on "at");
+  // with "avoid weak words" on, the grammar rule wins.
   const a = S.renderSpeech(truth, 9);
   const w = truth[6];
   for (let i = Math.floor(w.start * a.sampleRate); i < Math.floor((w.start + 0.3) * a.sampleRate); i++) a.samples[i] *= 3.5;
-  const res = E.generate({ timedText: JSON.stringify({ words: truth }), audio: E.analyzeAudio(a.samples, a.sampleRate), options: { minWords: 3, maxWords: 6 } });
-  res.captions.forEach((c) => assert.ok(!/\b(at|to|and)$/.test(c.text), c.text));
+  const env = E.analyzeAudio(a.samples, a.sampleRate);
+  const json = JSON.stringify({ words: truth });
+  const relaxed = E.generate({ timedText: json, audio: env, options: { minWords: 3, maxWords: 6 } });
+  assert.ok(relaxed.captions.some((c) => c.text.startsWith('many ')), capTexts(relaxed).join(' | '));
+  const strict = E.generate({ timedText: json, audio: env, options: { minWords: 3, maxWords: 6, avoidWeakEdges: true } });
+  strict.captions.forEach((c) => assert.ok(!/\b(at|to|and)$/.test(c.text), c.text));
+});
+
+test('a caption with enough words ends at the comma instead of spilling over', () => {
+  const text = 'If you want good captions, you need a transcript, a little patience and some time.';
+  const res = E.generate({ timedText: whisperJSON(text), options: { minWords: 3, maxWords: 8 } });
+  const t = capTexts(res);
+  assert.ok(t.includes('If you want good captions,'), t.join(' | '));
+  assert.ok(t.some((c) => c.startsWith('you need a transcript,')), t.join(' | '));
+  // Fewer words than the minimum before the comma: the caption may continue.
+  const res2 = E.generate({ timedText: whisperJSON('Well, I think this works really well for us.'), options: { minWords: 3, maxWords: 8 } });
+  assert.ok(!capTexts(res2).includes('Well,'), capTexts(res2).join(' | '));
+  // Rule can be switched off.
+  const res3 = E.generate({ timedText: whisperJSON(text), options: { minWords: 3, maxWords: 8, breakAtCommas: false } });
+  assert.ok(res3.captions.length <= res.captions.length);
+});
+
+test('captions may end on "of" by default', () => {
+  const text = 'This is one of the best examples of good timing that I have ever seen in my life.';
+  const strict = E.generate({ timedText: whisperJSON(text), options: { minWords: 2, maxWords: 4, avoidWeakEdges: true } });
+  const relaxed = E.generate({ timedText: whisperJSON(text), options: { minWords: 2, maxWords: 4 } });
+  assert.equal(relaxed.options.avoidWeakEdges, false);
+  strict.captions.slice(0, -1).forEach((c) => assert.ok(!/\b(of|the)$/.test(c.text), c.text));
 });

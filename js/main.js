@@ -48,6 +48,7 @@
       closeGapsUnder: d.closeGapsUnder, gapFrames: 2, offset: 0, language: d.language,
       protectNames: d.protectNames, protectNumbers: d.protectNumbers,
       continuous: d.continuous, splitSentences: d.splitSentences,
+      breakAtCommas: d.breakAtCommas, avoidWeakEdges: d.avoidWeakEdges,
       phrases: '', alignMode: 'sequence', scriptText: ''
     };
   }
@@ -72,6 +73,8 @@
     s.protectNumbers = $('protectNumbers').checked;
     s.continuous = $('continuous').checked;
     s.splitSentences = $('splitSentences').checked;
+    s.breakAtCommas = $('breakAtCommas').checked;
+    s.avoidWeakEdges = $('avoidWeakEdges').checked;
     s.phrases = $('phrases').value;
     s.alignMode = $('alignMode').value;
     s.scriptText = $('scriptText').value;
@@ -94,6 +97,8 @@
     $('protectNumbers').checked = !!s.protectNumbers;
     $('continuous').checked = !!s.continuous;
     $('splitSentences').checked = !!s.splitSentences;
+    $('breakAtCommas').checked = !!s.breakAtCommas;
+    $('avoidWeakEdges').checked = !!s.avoidWeakEdges;
     updateDisabled();
     $('phrases').value = s.phrases;
     $('alignMode').value = s.alignMode;
@@ -129,6 +134,8 @@
       protectNumbers: s.protectNumbers,
       continuous: s.continuous,
       splitSentences: s.splitSentences,
+      breakAtCommas: s.breakAtCommas,
+      avoidWeakEdges: s.avoidWeakEdges,
       phrases: s.phrases.split(/\r?\n/).map(function (l) { return l.trim(); }).filter(Boolean)
     };
   }

@@ -1,7 +1,7 @@
 {
-  "version": "1.4.0",
+  "version": "1.5.0",
   "date": "2026-10-31",
-  "notes": "Auto-detect language; start captions on stressed syllables",
+  "notes": "End captions at commas once they have the minimum words; allow ending on words like 'of'",
   "files": [
     "index.html",
     "css/style.css",

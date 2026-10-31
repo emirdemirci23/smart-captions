@@ -40,6 +40,8 @@
     maxDuration: 6,        // seconds; longer captions are penalised
     continuous: true,      // every caption lasts until the next one starts
     splitSentences: true,  // never put the end of one sentence and the start of another together
+    breakAtCommas: true,   // once a caption has minWords, it ends at the next comma (, ; : —)
+    avoidWeakEdges: false, // avoid ending on "of", "the"... / starting with "için", "gibi"...
     closeGapsUnder: 0.5,   // (continuous off) gaps shorter than this are closed
     minGap: 0.067,         // seconds between consecutive captions (~2 frames)
     pauseSplit: 0.8,       // a pause longer than this inside a caption is penalised
@@ -811,8 +813,11 @@
       var gap = nextW.start - prevW.end;
       if (gap > 0) c = Math.max(0, c - gap * 15);       // pauses are natural breaks
       var punct = hasTrailingPunct(prevW.text);
-      if (!punct && noEnd[normed[b - 1]]) c += 30;       // "... the | house"
-      if (!punct && noStart[normed[b]]) c += 30;         // "ev | için"
+      // Weak words at caption edges: a strong rule when enabled, otherwise only a
+      // tie-breaker (captions may end on "of" when commas, stress or limits call for it).
+      var weakCost = o.avoidWeakEdges ? 30 : 5;
+      if (!punct && noEnd[normed[b - 1]]) c += weakCost;     // "... the | house"
+      if (!punct && noStart[normed[b]]) c += weakCost;       // "ev | için"
       if (hasCues) c += words[b - 1].cueEnd ? -6 : 14;   // exact line times vs estimated
       // With audio, a caption that starts right after a pause has an unambiguous start.
       if (nextW.audio && prevW.audio && !words[b - 1].cueEnd) c += gap >= 0.06 ? -4 : AUDIO_NO_PAUSE;
@@ -849,13 +854,16 @@
 
     for (var j = 1; j <= n; j++) {
       if (j < n && B.forbidden[j]) continue;
-      var chars = -1, sentInside = 0, clauseInside = 0, maxGap = 0;
+      var chars = -1, sentInside = 0, clauseInside = 0, maxGap = 0, lastComma = -1;
       for (var i = j - 1; i >= 0 && j - i <= maxSpan; i--) {
         chars += words[i].text.length + 1;
         if (i < j - 1) {
           if (B.forced[i + 1]) break;               // can't span a forced break
           if (B.sentEnd[i + 1]) sentInside++;
-          else if (CLAUSE_RE.test(words[i].text)) clauseInside++;
+          else if (CLAUSE_RE.test(words[i].text)) {
+            clauseInside++;
+            if (lastComma < 0) lastComma = i + 1;   // comma boundary closest to the caption end
+          }
           var g = words[i + 1].start - words[i].end;
           if (g > maxGap) maxGap = g;
         }
@@ -870,6 +878,8 @@
         var dur = words[j - 1].end - words[i].start;
         if (dur > o.maxDuration) c += 30 * (dur - o.maxDuration);
         c += 25 * sentInside + 6 * clauseInside;
+        // The caption already had enough words when it reached a comma: it should have ended there.
+        if (o.breakAtCommas && lastComma > 0 && lastComma - i >= o.minWords) c += 500;
         if (maxGap > o.pauseSplit) c += 80 + (maxGap > o.pauseSplit * 3 ? 300 : 0);
         c += 1.5 * Math.abs(k - target);
         var total = best[i] + c + (j < n ? B.cost[j] : 0);
@@ -1383,6 +1393,8 @@
     o.protectNumbers = !!o.protectNumbers;
     o.continuous = !!o.continuous;
     o.splitSentences = !!o.splitSentences;
+    o.breakAtCommas = !!o.breakAtCommas;
+    o.avoidWeakEdges = !!o.avoidWeakEdges;
     if (o.language !== 'auto' && !LANGS[o.language]) o.language = 'other';
     if (!Array.isArray(o.phrases)) o.phrases = o.language === 'auto' ? null : LANGS[o.language].phrases.slice();
     return o;
