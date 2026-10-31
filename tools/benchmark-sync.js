@@ -44,6 +44,14 @@ for (const jitter of [0, 0.08]) {
         cases['Word-level JSON (±60 ms)'] = E.generate({ timedText: json, options });
         cases['Word-level JSON (±60 ms) + audio'] = E.generate({ timedText: json, audio: env, options });
         cases['Word-level JSON (±60 ms) + audio, 25 fps'] = E.generate({ timedText: json, audio: env, options: Object.assign({ frameDuration: 1 / fps }, options) });
+        // Harsher: transcript consistently 80 ms late plus up to ±100 ms random error.
+        const rough = truth.map((w) => ({ text: w.text, start: +(w.start + 0.08 + (rnd() * 2 - 1) * 0.1).toFixed(3), end: +(w.end + 0.08 + (rnd() * 2 - 1) * 0.1).toFixed(3) }));
+        for (let k = 1; k < rough.length; k++) if (rough[k].start <= rough[k - 1].start) rough[k].start = rough[k - 1].start + 0.01;
+        const roughJson = JSON.stringify({ words: rough });
+        cases['Word-level JSON (late 80 ±100 ms)'] = E.generate({ timedText: roughJson, options });
+        const roughRes = E.generate({ timedText: roughJson, audio: env, options });
+        cases['Word-level JSON (late 80 ±100 ms) + audio'] = roughRes;
+        (all.__matched = all.__matched || []).push(E.prepareWords(roughJson, '', env, options.language).audioWords / truth.length);
       }
       for (const [name, res] of Object.entries(cases)) {
         const key = name.startsWith('Word') ? name : `${name} | SRT line times ${jitter ? '±' + jitter * 1000 + ' ms off' : 'exact'}`;
@@ -54,7 +62,9 @@ for (const jitter of [0, 0.08]) {
 }
 console.log('Caption start error vs. true word start (synthetic speech, 10 voices, 2 languages)\n');
 console.log('case'.padEnd(58) + 'avg   median  p90   worst  (ms)');
+const matched = all.__matched; delete all.__matched;
 for (const [key, errs] of Object.entries(all)) {
   const s = S.summary(errs);
   console.log(key.padEnd(58) + [s.avg, s.median, s.p90, s.worst].map((x) => x.toFixed(0).padStart(5)).join(' ') + `   n=${s.n}`);
 }
+console.log(`\nWords timed from audio (rough word-level case): ${(matched.reduce((a, b) => a + b, 0) / matched.length * 100).toFixed(0)}%`);

@@ -680,6 +680,8 @@
         out[i - 1].cueStart = timedWords[j - 1].cueStart;
         out[i - 1].cueEnd = timedWords[j - 1].cueEnd;
         out[i - 1].audio = timedWords[j - 1].audio;
+        out[i - 1].anchored = timedWords[j - 1].anchored;
+        out[i - 1].afterPause = timedWords[j - 1].afterPause;
         out[i - 1].end = timedWords[j - 1].end;
         var sim = similarity(a[i - 1], b[j - 1]);
         if (sim === 1) exact++; else if (sim >= 0.5) fuzzy++;
@@ -793,6 +795,10 @@
       if (hasCues) c += words[b - 1].cueEnd ? -6 : 14;   // exact line times vs estimated
       // With audio, a caption that starts right after a pause has an unambiguous start.
       if (nextW.audio && prevW.audio && !words[b - 1].cueEnd) c += gap >= 0.06 ? -4 : AUDIO_NO_PAUSE;
+      // Prefer starting captions on words whose start was measured in the audio.
+      if (nextW.audio && !nextW.anchored) c += SYNC.UNANCHORED;
+      // Inside a subtitle line, only a start right after silence is certain.
+      if (hasCues && nextW.audio && !words[b - 1].cueEnd && !nextW.afterPause) c += SYNC.MIDLINE_UNSURE;
       cost[b] = Math.max(0, c);
     }
 
@@ -908,7 +914,8 @@
   // Audio-based sync refinement
   // ---------------------------------------------------------------------------
 
-  var AUDIO_NO_PAUSE = 4;   // extra cost for starting a caption without a pause before it
+  var AUDIO_NO_PAUSE = 4;
+  var OFFSET_MIN_WEIGHT = 15;   // extra cost for starting a caption without a pause before it
   var ENV_HOP = 0.0025;   // envelope resolution: 2.5 ms
   var ENV_WIN = 4;        // RMS window = 4 hops = 10 ms
 
@@ -1005,9 +1012,12 @@
       var frac = o > f && sm[o] !== sm[o - 1] ? (level - sm[o - 1]) / (sm[o] - sm[o - 1]) : 0;
       var t = timeOf(o - 1 + frac);
       var strength = Math.min(depth, 30) / 10;
+      var quiet = 0;                                   // silence right before the onset
+      for (var qf = o - 1; qf >= 0 && sm[qf] <= thr && quiet < 400; qf--) quiet++;
+      var pause = quiet * hopSec;
       var last = onsets[onsets.length - 1];
-      if (last && t - last.t < 0.012) { if (strength > last.s) { last.t = t; last.s = strength; } }
-      else onsets.push({ t: t, s: strength });
+      if (last && t - last.t < 0.012) { if (strength > last.s) { last.t = t; last.s = strength; last.pause = Math.max(last.pause, pause); } }
+      else onsets.push({ t: t, s: strength, pause: pause });
     }
 
     return {
@@ -1042,17 +1052,25 @@
    * without a dip), so that word lengths match their syllable counts and word
    * starts fall on real rises in the sound. Dynamic programming, optimal.
    */
-  function alignLineToAudio(ws, env, S, E, lang) {
+  var SYNC = { ALPHA: 6.0, BETA: 0.6, GAMMA: 0.7, SIGMA0: 0.12, SIGMA_LINE: 0.1, SIGMA_WORD: 0.1, UNANCHORED: 15, PAUSE_BONUS: 2, MIDLINE_UNSURE: 12 };
+
+  /**
+   * `priors[k]` is where word k is expected to start (transcript time or the
+   * estimate inside a subtitle line) and `sigmas[k]` how much to trust it. The
+   * audio pulls each word to a real onset when one is close; where speech flows
+   * without a dip, the word stays near its prior.
+   */
+  function alignLineToAudio(ws, env, S, E, lang, priors, sigmas) {
     var m = ws.length;
-    var GRID = 0.02, ALPHA = 6.0, BETA = 1.0, GAMMA = 0.7, SIGMA0 = 0.12;
+    var GRID = 0.02, ALPHA = SYNC.ALPHA, BETA = SYNC.BETA, GAMMA = SYNC.GAMMA;
     var lo = Math.max(0, S - 0.3), hi = E;
     var real = onsetsBetween(env, lo, hi);
-    var pts = real.map(function (o) { return { t: o.t, s: o.s }; });
+    var pts = real.map(function (o) { return { t: o.t, s: o.s, pause: o.pause }; });
     var ri = 0;
     for (var g = lo; g < hi; g += GRID) {
       while (ri < real.length && real[ri].t < g - 0.01) ri++;
       if (ri < real.length && Math.abs(real[ri].t - g) < 0.01) continue;
-      pts.push({ t: g, s: 0 });
+      pts.push({ t: g, s: 0, pause: 0 });
     }
     pts.sort(function (a, b) { return a.t - b.t; });
     var P = pts.length;
@@ -1076,16 +1094,23 @@
       return durCost(pts[i0].t, pts[j0].t, k) + GAMMA * d * d;
     };
 
+    var priorCost = function (j0, k0) {
+      var z = (pts[j0].t - priors[k0]) / sigmas[k0];
+      return z * z;
+    };
     var cost = [], back = [], j, i, k;
     cost[0] = new Float64Array(P);
+    // The first word of a line/phrase starts where sound resumes after silence.
+    var hasPauseOnset = pts.some(function (pt) { return pt.pause >= 0.08 && Math.abs(pt.t - priors[0]) < 3 * sigmas[0]; });
     for (j = 0; j < P; j++) {
-      var z = (pts[j].t - S) / SIGMA0;
-      cost[0][j] = z * z - BETA * pts[j].s;
+      cost[0][j] = priorCost(j, 0) - BETA * pts[j].s;
+      if (hasPauseOnset) cost[0][j] += pts[j].pause >= 0.08 ? -SYNC.PAUSE_BONUS : SYNC.PAUSE_BONUS;
     }
     for (k = 1; k < m; k++) {
       cost[k] = new Float64Array(P).fill(Infinity);
       back[k] = new Int32Array(P).fill(-1);
       for (j = 0; j < P; j++) {
+        if (Math.abs(pts[j].t - priors[k]) > 4 * sigmas[k] + 0.05) continue;
         var bestC = Infinity, bestI = -1;
         for (i = j - 1; i >= 0; i--) {
           if (pts[j].t - pts[i].t < 0.05) continue;
@@ -1093,7 +1118,7 @@
           var cc = cost[k - 1][i] + wordCost(i, j, k - 1);
           if (cc < bestC) { bestC = cc; bestI = i; }
         }
-        if (bestI >= 0) { cost[k][j] = bestC - BETA * pts[j].s; back[k][j] = bestI; }
+        if (bestI >= 0) { cost[k][j] = bestC + priorCost(j, k) - BETA * pts[j].s; back[k][j] = bestI; }
       }
     }
     var endBest = Infinity, endJ = -1;
@@ -1112,6 +1137,8 @@
     for (k = 0; k < m; k++) {
       ws[k].start = pts[idx[k]].t;
       ws[k].audio = true;
+      ws[k].anchored = pts[idx[k]].s > 0;   // start sits on a measured rise in the sound
+      ws[k].afterPause = pts[idx[k]].pause >= 0.08;   // ... right after silence: unambiguous
     }
     for (k = 0; k < m; k++) {
       var nextStart = k < m - 1 ? ws[k + 1].start : E;
@@ -1121,34 +1148,65 @@
   }
 
   /**
-   * Improve word timings with the audio. Lines (SRT/VTT input) are re-timed
-   * word by word; word-level input is only nudged onto a clear onset nearby.
-   * Returns the number of words that were re-timed.
+   * Median distance from word starts to the nearest clear onset: a transcript
+   * that is consistently a bit late or early (common for speech recognition).
+   */
+  function estimateBias(words, env) {
+    var d = [];
+    words.forEach(function (w, i) {
+      if (i > 0 && w.start - words[i - 1].end < 0.15) return;   // phrase starts only
+      var best = null;
+      onsetsBetween(env, w.start - 0.35, w.start + 0.35).forEach(function (o) {
+        if (o.pause >= 0.08 && (best === null || Math.abs(o.t - w.start) < Math.abs(best))) best = o.t - w.start;
+      });
+      if (best !== null) d.push(best);
+    });
+    if (d.length < 4) return 0;
+    var b = median(d);
+    return Math.abs(b) >= 0.005 ? b : 0;
+  }
+
+  /**
+   * Improve word timings with the audio. SRT/VTT lines and phrases of a
+   * word-level transcript are re-timed word by word (see alignLineToAudio).
+   * Returns the number of words that were timed from the audio.
    */
   function refineWithAudio(words, env, lang) {
-    var changed = 0, i = 0, n = words.length;
+    var changed = 0, i = 0, j, n = words.length, k;
     var hasCues = words.some(function (w) { return w.cueStart; });
+    var groups = [];
     if (hasCues) {
       while (i < n) {
-        var j = i + 1;
+        j = i + 1;
         while (j < n && !words[j].cueStart) j++;
-        var line = words.slice(i, j);
-        var S = line[0].start, E = line[line.length - 1].end;
-        if (E <= env.duration && E > S && alignLineToAudio(line, env, S, E, lang)) changed += line.length;
+        groups.push([i, j]);
         i = j;
       }
     } else {
-      for (i = 0; i < n; i++) {
-        var w = words[i], best = null, bestScore = 0.3;
-        onsetsBetween(env, w.start - 0.1, w.start + 0.1).forEach(function (o) {
-          var z = (o.t - w.start) / 0.05;
-          var sc = o.s - z * z;
-          if (sc > bestScore) { bestScore = sc; best = o.t; }
-        });
-        var prevStart = i > 0 ? words[i - 1].start : -Infinity;
-        if (best !== null && best > prevStart + 0.03 && best < w.end) { w.start = best; w.audio = true; changed++; }
+      var bias = estimateBias(words, env);
+      if (bias) words.forEach(function (w) { w.start += bias; w.end += bias; });
+      // Phrases: split at pauses in the transcript (and keep them reasonably short).
+      while (i < n) {
+        j = i + 1;
+        while (j < n && j - i < 25 && words[j].start - words[j - 1].end < 0.25) j++;
+        groups.push([i, j]);
+        i = j;
       }
     }
+    groups.forEach(function (g) {
+      var line = words.slice(g[0], g[1]);
+      var S = line[0].start, E = line[line.length - 1].end;
+      if (E > env.duration || E <= S) return;
+      var priors = line.map(function (w) { return w.start; });
+      var sigmas = line.map(function (w, q) {
+        if (!hasCues) return q === 0 ? Math.max(SYNC.SIGMA_WORD, 0.15) : SYNC.SIGMA_WORD;
+        return q === 0 ? SYNC.SIGMA0 : SYNC.SIGMA_LINE;
+      });
+      var saved = line.map(function (w) { return [w.start, w.end]; });
+      if (alignLineToAudio(line, env, S, E, lang, priors, sigmas)) changed += line.length;
+      else line.forEach(function (w, q) { w.start = saved[q][0]; w.end = saved[q][1]; });
+    });
+    for (k = 1; k < n; k++) if (words[k].start <= words[k - 1].start) words[k].start = words[k - 1].start + 0.01;
     return changed;
   }
 
@@ -1227,11 +1285,16 @@
       }
       return sc / W;
     };
-    var best = 0, bestScore = score(0), off;
+    var best = 0, bestScore = score(0), off, curve = [];
     for (off = -3; off <= 3.0001; off += 0.01) {
       var sc = score(off);
+      curve.push([off, sc]);
       if (sc > bestScore) { bestScore = sc; best = off; }
     }
+    // Rhythmic speech can make a wrong shift look good: the winner must clearly
+    // beat the best alternative that is more than 100 ms away from it.
+    var second = 0;
+    curve.forEach(function (c) { if (Math.abs(c[0] - best) > 0.1 && c[1] > second) second = c[1]; });
     var coarse = best;
     for (off = coarse - 0.01; off <= coarse + 0.0101; off += 0.002) {
       var sc2 = score(off);
@@ -1239,8 +1302,13 @@
     }
     var zero = score(0);
     // Small differences are fixed word by word later; only correct a clear, real shift.
-    if (Math.abs(best) < 0.1 || bestScore < zero * 1.4 + 0.08) return { offset: 0, confidence: zero };
-    return { offset: Math.round(best * 1000) / 1000, confidence: bestScore };
+    var result = { offset: 0, confidence: zero, best: best, bestScore: bestScore, weight: W };
+    // Small differences are fixed word by word later; only correct a clear, real
+    // shift, and only with enough material to be sure.
+    if (Math.abs(best) < 0.1 || W < OFFSET_MIN_WEIGHT || bestScore < zero * 1.4 + 0.08 || bestScore < second * 1.35) return result;
+    result.offset = Math.round(best * 1000) / 1000;
+    result.confidence = bestScore;
+    return result;
   }
 
   // ---------------------------------------------------------------------------
@@ -1278,6 +1346,8 @@
       if (off.offset) timed.words.forEach(function (w) { w.start += off.offset; w.end += off.offset; });
       result.audioOffset = off.offset;
       result.audioWords = refineWithAudio(timed.words, audioEnv, language || 'other');
+      result.audioAnchored = timed.words.filter(function (w) { return w.anchored; }).length;
+      result.wordsAfterAudio = timed.words.filter(function (w) { return w.start > audioEnv.duration; }).length;
       var last = timed.words[timed.words.length - 1];
       result.audioTooShort = last.end > audioEnv.duration + 1;
     }
@@ -1296,7 +1366,7 @@
     var lang = LANGS[o.language];
     // Work on copies so cached words are never mutated.
     var ws = words.map(function (w) {
-      return { text: w.text, start: w.start, end: w.end, breakAfter: w.breakAfter, cueStart: w.cueStart, cueEnd: w.cueEnd, audio: w.audio };
+      return { text: w.text, start: w.start, end: w.end, breakAfter: w.breakAfter, cueStart: w.cueStart, cueEnd: w.cueEnd, audio: w.audio, anchored: w.anchored, afterPause: w.afterPause };
     });
     var hasCues = ws.some(function (w) { return w.cueEnd; });
     var B = buildBoundaries(ws, o, lang);
@@ -1314,7 +1384,8 @@
       return {
         words: cw, wordCount: cw.length, lines: lines, text: lines.join(' '), flags: flags,
         estimatedStart: hasCues && !cw[0].cueStart && !cw[0].audio,
-        audioSynced: !!cw[0].audio
+        audioSynced: !!cw[0].audio,
+        audioAnchored: !!cw[0].anchored
       };
     });
     caps = finalizeTiming(caps, o);
@@ -1329,7 +1400,9 @@
         words: total,
         avgWords: caps.length ? total / caps.length : 0,
         flagged: caps.filter(function (c) { return c.flags.length; }).length,
-        estimated: caps.filter(function (c) { return c.estimatedStart; }).length
+        estimated: caps.filter(function (c) { return c.estimatedStart; }).length,
+        audioSynced: caps.filter(function (c) { return c.audioSynced; }).length,
+        audioAnchored: caps.filter(function (c) { return c.audioAnchored; }).length
       }
     };
   }
@@ -1370,6 +1443,7 @@
     refineWithAudio: refineWithAudio,
     decodeWav: decodeWav,
     countSyllables: countSyllables,
+    SYNC: SYNC,
     parseTimedTranscript: parseTimedTranscript,
     parseScript: parseScript,
     alignScriptToTimings: alignScriptToTimings,

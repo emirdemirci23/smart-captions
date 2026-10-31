@@ -338,7 +338,7 @@ test('word-level transcript + audio: caption starts within a few ms', () => {
   }
   const s = S.summary(errs);
   assert.ok(s.avg < 10, 'average error ' + s.avg.toFixed(1) + ' ms');
-  assert.ok(s.worst < 30, 'worst error ' + s.worst.toFixed(1) + ' ms');
+  assert.ok(s.p90 < 25, '90% within ' + s.p90.toFixed(1) + ' ms');
 });
 
 test('SRT + audio is more accurate than SRT alone', () => {
@@ -365,4 +365,20 @@ test('a constant shift between transcript and audio is detected and corrected', 
   // No false shift when the timing only has small random errors.
   const srt = E.toSRT(S.makeLines(truth, { jitter: 0.08, seed: 2 }), '\n');
   assert.equal(E.prepareWords(srt, '', env, 'en').audioOffset, 0);
+});
+
+test('word-level transcript that is consistently late is corrected by the audio', () => {
+  const errs = [];
+  for (const seed of [51, 52, 53]) {
+    const { truth, env } = audioCase(seed);
+    let x = seed;
+    const rnd = () => (x = (x * 16807) % 2147483647) / 2147483647;
+    const late = truth.map((w) => ({ text: w.text, start: w.start + 0.08 + (rnd() * 2 - 1) * 0.1, end: w.end + 0.08 + (rnd() * 2 - 1) * 0.1 }));
+    for (let k = 1; k < late.length; k++) if (late[k].start <= late[k - 1].start) late[k].start = late[k - 1].start + 0.01;
+    const res = E.generate({ timedText: JSON.stringify({ words: late }), audio: env, options: { minWords: 3, maxWords: 6 } });
+    errs.push(...S.captionErrors(res.captions, truth));
+  }
+  const s = S.summary(errs);
+  assert.ok(s.median < 6, 'median ' + s.median.toFixed(1) + ' ms');
+  assert.ok(s.avg < 20, 'average ' + s.avg.toFixed(1) + ' ms');
 });

@@ -27,10 +27,12 @@ Load the **audio** too (a WAV of the same sequence or clip you transcribed: *Fil
 
 | What you load | Average caption start error* |
 |---|---|
-| Word-level JSON (Premiere) **+ audio** | **2 ms** (10 ms after Premiere rounds to frames at 25 fps) |
-| SRT + audio | 27–36 ms (median 3 ms; occasional one-syllable slips) |
-| Word-level JSON alone | ≈ 30 ms (as accurate as the transcription) |
-| SRT alone | 60–80 ms (captions starting mid-line are estimated, marked ≈) |
+| Word-level JSON (Premiere) **+ audio** | **5–11 ms**, median 3 ms (≈ 12 ms after Premiere rounds to frames at 25 fps) |
+| SRT + audio | 37–39 ms (median 3 ms; captions starting mid-line where words run together can slip a syllable) |
+| Word-level JSON alone | 30–80 ms (as accurate as the transcription) |
+| SRT alone | 50–75 ms (captions starting mid-line are estimated, marked ≈) |
+
+The panel reports how many words start on a clear sound. A word can't be measured when it runs into the previous word without any break in the sound; its time then comes from the transcript. Transcripts that are consistently a bit late or early are corrected automatically.
 
 \*Measured with `node tools/benchmark-sync.js` on synthetic speech with known word times. Real recordings are messier, so expect somewhat larger numbers. Premiere places captions on frames, so the final result can't be finer than half a frame (20 ms at 25 fps, 17 ms at 30 fps).
 

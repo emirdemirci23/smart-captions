@@ -281,15 +281,17 @@
     var st = res.stats;
     $('stats').textContent = st.captions + ' captions · avg ' + st.avgWords.toFixed(1) + ' words' +
       (st.flagged ? ' · ' + st.flagged + ' flagged' : '') +
-      (st.estimated ? ' · ' + st.estimated + ' estimated (≈)' : '');
+      (st.estimated ? ' · ' + st.estimated + ' estimated (≈)' : '') +
+      (st.audioSynced ? ' · ' + st.audioAnchored + '/' + st.captions + ' starts on a clear sound (♪)' : '');
     var frag = document.createDocumentFragment();
     res.captions.forEach(function (c) {
       var li = document.createElement('li');
       if (c.flags.length) li.className = 'flagged';
       var time = document.createElement('span');
       time.className = 'time';
-      time.textContent = (c.estimatedStart ? '≈' : c.audioSynced ? '♪' : '') + fmtTime(c.start) + '\n' + fmtTime(c.end);
-      if (c.audioSynced) time.title = 'Start timed from the audio.';
+      time.textContent = (c.estimatedStart ? '≈' : c.audioAnchored ? '♪' : '') + fmtTime(c.start) + '\n' + fmtTime(c.end);
+      if (c.audioAnchored) time.title = 'Starts exactly where the word begins in the audio.';
+      else if (c.audioSynced) time.title = 'Timed from the audio, but there is no clear break in the sound here (words run together).';
       if (c.estimatedStart) time.title = 'Estimated: this caption starts in the middle of a line of the source file.';
       time.style.whiteSpace = 'pre';
       var text = document.createElement('span');
@@ -331,7 +333,9 @@
     var msg = p.format + ' · ' + p.words.length + ' words';
     var kind = '';
     if (state.audioEnv) {
-      msg += '\nAudio sync: ' + p.audioWords + ' of ' + p.words.length + ' words timed from the audio';
+      msg += '\nAudio sync: ' + p.audioWords + ' of ' + p.words.length + ' words timed from the audio, ' +
+        p.audioAnchored + ' start on a clear sound';
+      if (p.wordsAfterAudio) { kind = 'warn'; msg += '\n' + p.wordsAfterAudio + ' words are after the end of the audio file.'; }
       if (p.kind === 'cues') msg += ' (for the most exact result use a word-level JSON transcript)';
       if (p.audioOffset) msg += ' · transcript was shifted ' + (p.audioOffset > 0 ? '+' : '') + p.audioOffset.toFixed(3) + ' s to match the audio';
       if (p.audioTooShort) { kind = 'warn'; msg += '\nThe audio is shorter than the transcript – is it the right file?'; }

@@ -28,15 +28,19 @@ function syllables(word, rnd, lang) {
 function makeTruth(text, seed = 7, lang = 'en') {
   const rnd = rng(seed);
   let t = 0.6;
+  let glueNext = false;
   return text.split(/\s+/).filter(Boolean).map((w, i, arr) => {
-    const lead = rnd() < 0.25 ? 0.03 + rnd() * 0.03 : 0;        // quiet consonant before the vowel
+    const glued = glueNext;                                       // no dip at all before this word
+    glueNext = false;
+    const lead = !glued && rnd() < 0.25 ? 0.03 + rnd() * 0.03 : 0; // quiet consonant before the vowel
     const syl = syllables(w, rnd, lang);
     const dur = lead + syl * (0.12 + rnd() * 0.09) + 0.04;
-    const word = { text: w, start: +t.toFixed(4), end: +(t + dur).toFixed(4), lead, syl };
+    const word = { text: w, start: +t.toFixed(4), end: +(t + dur).toFixed(4), lead, syl, glued };
     let gap;
     if (/[.!?]$/.test(w)) gap = 0.35 + rnd() * 0.6;
     else if (/[,:;]$/.test(w)) gap = 0.12 + rnd() * 0.3;
-    else gap = rnd() < 0.4 ? -0.01 : rnd() * 0.05;              // 40%: words run together
+    else if (rnd() < 0.4) { gap = -0.01; glueNext = rnd() < 0.6; } // 40% run together, most with no dip
+    else gap = rnd() * 0.05;
     t += dur + gap;
     return word;
   });
@@ -64,16 +68,21 @@ function renderSpeech(truth, seed = 11, sampleRate = 16000) {
       out[i] += amp * env * (rnd() * 2 - 1);
     }
   };
-  for (const w of truth) {
+  truth.forEach((w, wi) => {
     let t = w.start;
     if (w.lead) { addNoise(t, t + w.lead + 0.01, 0.05 + rnd() * 0.05); t += w.lead; }
+    const next = truth[wi + 1];
     const sylDur = (w.end - t) / w.syl;
     for (let k = 0; k < w.syl; k++) {
       const amp = 0.25 + rnd() * 0.6;
-      addTone(t, t + sylDur * (0.85 + rnd() * 0.1), amp, 110 + rnd() * 90, 0.012, 0.03);
+      const lastSyl = k === w.syl - 1;
+      // Glued boundary: this word's sound carries on into the next word (coarticulation).
+      const end = lastSyl && next && next.glued ? next.start + 0.04 : t + sylDur * (0.85 + rnd() * 0.1);
+      const attack = k === 0 && w.glued ? 0.04 : 0.012;
+      addTone(t, end, amp, 110 + rnd() * 90, attack, lastSyl && next && next.glued ? 0.05 : 0.03);
       t += sylDur;
     }
-  }
+  });
   return { samples: out, sampleRate };
 }
 
