@@ -6,6 +6,7 @@
  *
  * Options:
  *   --script FILE      corrected plain-text script (words from here, timings from the transcript)
+ *   --audio FILE.wav   audio of the same media: word starts are timed from the sound (precise sync)
  *   --min N            minimum words per caption        (default 3)
  *   --max N            maximum words per caption        (default 8)
  *   --chars N          maximum characters per line      (default 42)
@@ -38,6 +39,7 @@ try {
   const res = E.generate({
     timedText: fs.readFileSync(input, 'utf8'),
     scriptText: opt('script') ? fs.readFileSync(opt('script'), 'utf8') : '',
+    audio: opt('audio') ? E.analyzeWav(new Uint8Array(fs.readFileSync(opt('audio')))) : null,
     options,
   });
   const srt = E.toSRT(res.captions);

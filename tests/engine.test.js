@@ -300,3 +300,69 @@ test('reads HH:MM:SS:FF timecodes and rejects binary files', () => {
   assert.ok(Math.abs(words[0].end - 1.48) < 1e-9);   // 25 fps (frame 24 seen)
   assert.throws(() => E.parseTimedTranscript('\u0000\u0001\u0002PRT\u0000\u0000binary\u0003\u0004'.repeat(20)), /binary file/);
 });
+
+// ---------------------------------------------------------------------------
+// Audio sync (synthetic speech with known word times, see tests/synth.js)
+// ---------------------------------------------------------------------------
+const S = require('./synth.js');
+const fsMod = require('fs');
+const sampleText = fsMod.readFileSync(require('path').join(__dirname, '..', 'samples', 'sample-script.txt'), 'utf8').replace(/\s+/g, ' ').trim();
+
+function audioCase(seed) {
+  const truth = S.makeTruth(sampleText, seed, 'en');
+  const { samples, sampleRate } = S.renderSpeech(truth, seed + 1);
+  return { truth, samples, sampleRate, env: E.analyzeAudio(samples, sampleRate) };
+}
+
+test('WAV files are analysed straight from bytes (same result as decoded samples)', () => {
+  const { samples, sampleRate } = audioCase(3);
+  const wav = S.toWav(samples, sampleRate, 2);
+  const a = E.analyzeWav(new Uint8Array(wav));
+  const decoded = E.decodeWav(new Uint8Array(wav));
+  const b = E.analyzeAudio(decoded.channels, decoded.sampleRate);
+  assert.equal(a.onsets.length, b.onsets.length);
+  assert.ok(Math.abs(a.duration - samples.length / sampleRate) < 1e-6);
+  assert.throws(() => E.analyzeWav(new Uint8Array(100)), /Not a WAV/);
+});
+
+test('word-level transcript + audio: caption starts within a few ms', () => {
+  const errs = [];
+  for (const seed of [21, 22, 23]) {
+    const { truth, env } = audioCase(seed);
+    let x = seed;
+    const rnd = () => (x = (x * 16807) % 2147483647) / 2147483647;
+    const noisy = truth.map((w) => ({ text: w.text, start: w.start + (rnd() * 2 - 1) * 0.06, end: w.end + (rnd() * 2 - 1) * 0.06 }));
+    for (let k = 1; k < noisy.length; k++) if (noisy[k].start <= noisy[k - 1].start) noisy[k].start = noisy[k - 1].start + 0.01;
+    const res = E.generate({ timedText: JSON.stringify({ words: noisy }), audio: env, options: { minWords: 3, maxWords: 6 } });
+    errs.push(...S.captionErrors(res.captions, truth));
+  }
+  const s = S.summary(errs);
+  assert.ok(s.avg < 10, 'average error ' + s.avg.toFixed(1) + ' ms');
+  assert.ok(s.worst < 30, 'worst error ' + s.worst.toFixed(1) + ' ms');
+});
+
+test('SRT + audio is more accurate than SRT alone', () => {
+  const withA = [], without = [];
+  for (const seed of [31, 32, 33]) {
+    const { truth, env } = audioCase(seed);
+    const srt = E.toSRT(S.makeLines(truth, { seed }), '\n');
+    const opts = { minWords: 3, maxWords: 6 };
+    without.push(...S.captionErrors(E.generate({ timedText: srt, options: opts }).captions, truth));
+    const res = E.generate({ timedText: srt, audio: env, options: opts });
+    withA.push(...S.captionErrors(res.captions, truth));
+    assert.ok(res.captions.every((c) => !c.estimatedStart));
+  }
+  const a = S.summary(withA), b = S.summary(without);
+  assert.ok(a.median < 10, 'median with audio ' + a.median.toFixed(1));
+  assert.ok(a.avg < b.avg, `with audio ${a.avg.toFixed(1)} vs without ${b.avg.toFixed(1)}`);
+});
+
+test('a constant shift between transcript and audio is detected and corrected', () => {
+  const { truth, env } = audioCase(41);
+  const shifted = truth.map((w) => ({ text: w.text, start: w.start + 0.5, end: w.end + 0.5 }));
+  const prep = E.prepareWords(JSON.stringify({ words: shifted }), '', env, 'en');
+  assert.ok(Math.abs(prep.audioOffset + 0.5) < 0.01, 'offset ' + prep.audioOffset);
+  // No false shift when the timing only has small random errors.
+  const srt = E.toSRT(S.makeLines(truth, { jitter: 0.08, seed: 2 }), '\n');
+  assert.equal(E.prepareWords(srt, '', env, 'en').audioOffset, 0);
+});

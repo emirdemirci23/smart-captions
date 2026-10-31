@@ -23,12 +23,21 @@ A Premiere Pro panel that turns your transcript into **synchronized captions**. 
 
 ## Getting exact sync
 
-Captions are only as exact as the timings in the file you load:
+Load the **audio** too (a WAV of the same sequence or clip you transcribed: *File → Export → Media → Format: Waveform Audio*). The panel finds where each word starts in the sound and moves the caption there. It also detects and fixes a constant shift (up to ±3 s) between the transcript and the audio. Captions timed from the audio show **♪** in the preview.
 
-- **Word-level transcript (exact):** every caption starts on the exact time its first word is spoken (rounded to the nearest frame, since Premiere places captions on frames). Get one from Premiere's own Speech to Text: transcribe in the Text panel, then **Transcript → … menu → Export → JSON**. If the transcript has wrong words, paste the corrected script; your words get Premiere's timings.
-  - Transcribed the **sequence** → set Placement to *Sequence start*.
-  - Transcribed a **clip** (Source Monitor) → select that clip in the timeline and set Placement to *Selected clip's media start*.
-- **SRT / VTT (partly estimated):** these only have one time per line. Captions that start where a line starts are exact; captions that start in the middle of a line have estimated times and are marked **≈** in the preview.
+| What you load | Average caption start error* |
+|---|---|
+| Word-level JSON (Premiere) **+ audio** | **2 ms** (10 ms after Premiere rounds to frames at 25 fps) |
+| SRT + audio | 27–36 ms (median 3 ms; occasional one-syllable slips) |
+| Word-level JSON alone | ≈ 30 ms (as accurate as the transcription) |
+| SRT alone | 60–80 ms (captions starting mid-line are estimated, marked ≈) |
+
+\*Measured with `node tools/benchmark-sync.js` on synthetic speech with known word times. Real recordings are messier, so expect somewhat larger numbers. Premiere places captions on frames, so the final result can't be finer than half a frame (20 ms at 25 fps, 17 ms at 30 fps).
+
+**Best setup:** Premiere's own transcript as JSON (*Text panel → Transcript → … menu → Export → JSON*) + the audio as WAV. If the transcript has wrong words, paste the corrected script; your words get the measured timings.
+
+- Transcribed the **sequence** → export the sequence audio, Placement *Sequence start*.
+- Transcribed a **clip** → use that clip's audio, select the clip in the timeline, Placement *Selected clip's media start*.
 
 ## Install (macOS / Windows)
 
@@ -68,6 +77,8 @@ Restart Premiere Pro → **Window → Extensions → Smart Captions**.
 ```bash
 npm test                                   # run the engine tests
 node tools/make-srt.js samples/sample-whisper.json --script samples/sample-script.txt --min 3 --max 7 --out captions.srt
+node tools/make-srt.js transcript.json --audio audio.wav --out captions.srt   # precise sync from the audio
+node tools/benchmark-sync.js               # measure sync accuracy
 ```
 
 Opening `index.html` in a browser also works for previewing and downloading the SRT.

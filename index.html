@@ -32,6 +32,15 @@
         </div>
         <textarea id="scriptText" rows="4" placeholder="Paste the script here (optional). A line break = preferred break, | = forced break."></textarea>
       </label>
+      <label class="field">
+        <span>Audio for precise sync <em class="muted">(optional – WAV of the same sequence/clip you transcribed)</em></span>
+        <div class="filerow">
+          <button class="btn small" id="audioBtn" type="button">Choose audio…</button>
+          <input type="file" id="audioFile" hidden>
+          <button class="btn small ghost" id="clearAudio" type="button">Clear</button>
+          <span id="audioName" class="muted ellipsis">No audio</span>
+        </div>
+      </label>
       <div id="sourceInfo" class="info"></div>
     </div>
   </details>

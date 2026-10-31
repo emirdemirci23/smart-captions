@@ -14,6 +14,8 @@
     timedText: null,
     timedName: '',
     prepared: null,       // cached result of E.prepareWords
+    audioEnv: null,       // analysed audio (E.analyzeWav / E.analyzeAudio)
+    audioName: '',
     preparedKey: '',
     result: null,
     frameDuration: 1 / 30
@@ -147,10 +149,12 @@
   }
 
   /** Read a browser File object (file input / drag and drop) with encoding detection. */
-  function readFile(file) {
+  function readFile(file, binary) {
     return new Promise(function (resolve, reject) {
       var r = new FileReader();
-      r.onload = function () { resolve({ name: file.name, text: E.decodeBytes(new Uint8Array(r.result)) }); };
+      r.onload = function () {
+        resolve(binary ? { name: file.name, bytes: r.result } : { name: file.name, text: E.decodeBytes(new Uint8Array(r.result)) });
+      };
       r.onerror = function () { reject(r.error); };
       r.readAsArrayBuffer(file);
     });
@@ -163,28 +167,86 @@
    * filter (the HTML file picker can grey out .srt files on macOS).
    * Resolves to {name, text}, or null if cancelled.
    */
-  function pickFile(inputId, title) {
+  function pickFile(inputId, title, binary) {
     if (!nativeFs) {
       return new Promise(function (resolve) {
         var input = $(inputId);
         input.onchange = function () {
           var f = input.files[0];
           input.value = '';
-          resolve(f ? readFile(f) : null);
+          resolve(f ? readFile(f, binary) : null);
         };
         input.click();
       });
     }
-    return new Promise(function (resolve, reject) {
-      var res = nativeFs.showOpenDialogEx(false, false, title, '', []);
-      if (res.err || !res.data || !res.data.length) { resolve(null); return; }
-      var path = res.data[0];
+    var res = nativeFs.showOpenDialogEx(false, false, title, '', []);
+    if (res.err || !res.data || !res.data.length) return Promise.resolve(null);
+    var path = res.data[0];
+    var name = path.split(/[\\/]/).pop();
+    return readPathBytes(path).then(function (buf) {
+      return binary ? { name: name, bytes: buf } : { name: name, text: E.decodeBytes(new Uint8Array(buf)) };
+    });
+  }
+
+  /** Read a local file as an ArrayBuffer (fast path via file:// URL, fallback via CEP). */
+  function readPathBytes(path) {
+    var url = 'file://' + (path.charAt(0) === '/' ? '' : '/') + path.replace(/\\/g, '/').split('/').map(encodeURIComponent).join('/').replace(/^([A-Za-z])%3A/, '$1:');
+    return fetch(url).then(function (r) {
+      if (!r.ok && r.status !== 0) throw new Error('HTTP ' + r.status);
+      return r.arrayBuffer();
+    }).then(function (buf) {
+      if (!buf.byteLength) throw new Error('empty');
+      return buf;
+    }).catch(function () {
       var read = nativeFs.readFile(path, window.cep.encoding.Base64);
-      if (read.err) { reject(new Error('Could not read ' + path + ' (error ' + read.err + ')')); return; }
+      if (read.err) throw new Error('Could not read ' + path + ' (error ' + read.err + ')');
       var bin = atob(read.data), bytes = new Uint8Array(bin.length);
       for (var i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
-      resolve({ name: path.split(/[\\/]/).pop(), text: E.decodeBytes(bytes) });
+      return bytes.buffer;
     });
+  }
+
+  /** Analyse an audio file: WAV is read directly; other formats via the browser's decoder. */
+  function analyzeAudioFile(file) {
+    try {
+      return Promise.resolve(E.analyzeWav(file.bytes));
+    } catch (wavErr) {
+      if (!/Not a WAV/.test(wavErr.message)) return Promise.reject(wavErr);
+      var Ctx = window.AudioContext || window.webkitAudioContext;
+      if (!Ctx) return Promise.reject(new Error('This file type can\'t be read here. Export the audio as WAV.'));
+      var ctx = new Ctx();
+      return new Promise(function (resolve, reject) {
+        ctx.decodeAudioData(file.bytes.slice(0), resolve, reject);
+      }).then(function (ab) {
+        var ch = [];
+        for (var c = 0; c < ab.numberOfChannels; c++) ch.push(ab.getChannelData(c));
+        if (ctx.close) ctx.close();
+        return E.analyzeAudio(ch, ab.sampleRate);
+      }, function () {
+        if (ctx.close) ctx.close();
+        throw new Error('This audio format can\'t be read in Premiere\'s panel. Export the audio as WAV ' +
+          '(File → Export → Media → Format: Waveform Audio).');
+      });
+    }
+  }
+
+  function loadAudio(file) {
+    if (!file) return;
+    $('audioName').textContent = 'Analysing ' + file.name + '…';
+    // Let the label repaint before the (synchronous) analysis.
+    setTimeout(function () {
+      analyzeAudioFile(file).then(function (env) {
+        state.audioEnv = env;
+        state.audioName = file.name;
+        state.prepared = null;
+        var mins = Math.floor(env.duration / 60), secs = Math.round(env.duration % 60);
+        $('audioName').textContent = file.name + ' · ' + mins + ':' + (secs < 10 ? '0' : '') + secs;
+        refresh();
+      }).catch(function (e) {
+        $('audioName').textContent = 'No audio';
+        fileError(e);
+      });
+    }, 30);
   }
 
   function loadTimed(file) {
@@ -226,7 +288,8 @@
       if (c.flags.length) li.className = 'flagged';
       var time = document.createElement('span');
       time.className = 'time';
-      time.textContent = (c.estimatedStart ? '≈' : '') + fmtTime(c.start) + '\n' + fmtTime(c.end);
+      time.textContent = (c.estimatedStart ? '≈' : c.audioSynced ? '♪' : '') + fmtTime(c.start) + '\n' + fmtTime(c.end);
+      if (c.audioSynced) time.title = 'Start timed from the audio.';
       if (c.estimatedStart) time.title = 'Estimated: this caption starts in the middle of a line of the source file.';
       time.style.whiteSpace = 'pre';
       var text = document.createElement('span');
@@ -259,18 +322,30 @@
 
   function prepare() {
     var script = $('scriptText').value;
-    var key = state.timedName + '\u0000' + (state.timedText ? state.timedText.length : 0) + '\u0000' + script;
+    var language = $('language').value;
+    var key = [state.timedName, state.timedText ? state.timedText.length : 0, script, state.audioName, language].join('\u0000');
     if (state.prepared && state.preparedKey === key) return state.prepared;
-    state.prepared = E.prepareWords(state.timedText, script);
+    state.prepared = E.prepareWords(state.timedText, script, state.audioEnv, language);
     state.preparedKey = key;
     var p = state.prepared;
     var msg = p.format + ' · ' + p.words.length + ' words';
     var kind = '';
-    if (p.kind === 'cues') {
+    if (state.audioEnv) {
+      msg += '\nAudio sync: ' + p.audioWords + ' of ' + p.words.length + ' words timed from the audio';
+      if (p.kind === 'cues') msg += ' (for the most exact result use a word-level JSON transcript)';
+      if (p.audioOffset) msg += ' · transcript was shifted ' + (p.audioOffset > 0 ? '+' : '') + p.audioOffset.toFixed(3) + ' s to match the audio';
+      if (p.audioTooShort) { kind = 'warn'; msg += '\nThe audio is shorter than the transcript – is it the right file?'; }
+      if (p.audioWords < p.words.length * 0.5) {
+        kind = 'warn';
+        msg += '\nFew words matched the audio. The audio must start at the same point as the transcript ' +
+          '(export the audio of the same sequence or clip you transcribed).';
+      }
+    } else if (p.kind === 'cues') {
       kind = 'warn';
       msg += '\nThis file only has a time per line, not per word. Captions that start in the middle of a line ' +
         'have estimated times (marked ≈). For exact sync, load a transcript with word timings: in Premiere, ' +
-        'Text panel → Transcript → … menu → Export → JSON, then choose that file here.';
+        'Text panel → Transcript → … menu → Export → JSON, then choose that file here. Adding the audio (WAV) ' +
+        'below also makes the timing much more accurate.';
     }
     if (p.alignment) {
       var pct = Math.round(p.alignment.ratio * 100);
@@ -411,11 +486,21 @@
       document.body.classList.remove('dragging');
       var f = ev.dataTransfer && ev.dataTransfer.files[0];
       if (!f) return;
+      if (/\.(wav|wave|mp3|m4a|aac|aif|aiff)$/i.test(f.name)) { readFile(f, true).then(loadAudio, fileError); return; }
       var toScript = ev.target === $('scriptText');
       readFile(f).then(toScript ? loadScript : loadTimed, fileError);
     });
 
     $('clearScript').addEventListener('click', function () { $('scriptText').value = ''; refresh(); });
+
+    $('audioBtn').addEventListener('click', function () {
+      pickFile('audioFile', 'Choose the audio (WAV) of the same sequence or clip', true).then(loadAudio, fileError);
+    });
+    $('clearAudio').addEventListener('click', function () {
+      state.audioEnv = null; state.audioName = ''; state.prepared = null;
+      $('audioName').textContent = 'No audio';
+      refresh();
+    });
 
     $('resetPhrases').addEventListener('click', function () {
       $('phrases').value = E.LANGS[$('language').value].phrases.join('\n');

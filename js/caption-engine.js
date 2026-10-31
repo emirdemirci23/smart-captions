@@ -152,11 +152,21 @@
    * Relative speaking time of a word inside a subtitle line: syllables (vowel
    * groups; digits count as spoken numbers) plus a short pause after punctuation.
    */
-  function speechWeight(text, isLast) {
+  /** Estimated syllables (vowel groups; English silent "e" / "-ed" rules; digits as spoken numbers). */
+  function countSyllables(text, lang) {
     var n = norm(text);
     var digits = (n.match(/\d/g) || []).length;
-    var syll = (n.replace(/\d/g, '').match(/[aeiouy]+/g) || []).length + digits * 1.3;
-    var w = Math.max(1, syll) + 0.3;
+    var w = n.replace(/\d/g, '');
+    var groups = (w.match(/[aeiouy]+/g) || []).length;
+    if (lang === 'en' && groups > 1) {
+      if (/[^aeiouy]e$/.test(w) && !/[^aeiouy]le$/.test(w)) groups--;      // time, make, one
+      else if (/[^aeiouytd]ed$/.test(w)) groups--;                          // walked, named
+    }
+    return Math.max(1, groups + Math.round(digits * 1.3));
+  }
+
+  function speechWeight(text, isLast, lang) {
+    var w = countSyllables(text, lang) + 0.3;
     if (!isLast) {
       if (SENT_END_RE.test(text)) w += 1.6;
       else if (CLAUSE_RE.test(text)) w += 0.9;
@@ -669,6 +679,7 @@
         out[i - 1].start = timedWords[j - 1].start;
         out[i - 1].cueStart = timedWords[j - 1].cueStart;
         out[i - 1].cueEnd = timedWords[j - 1].cueEnd;
+        out[i - 1].audio = timedWords[j - 1].audio;
         out[i - 1].end = timedWords[j - 1].end;
         var sim = similarity(a[i - 1], b[j - 1]);
         if (sim === 1) exact++; else if (sim >= 0.5) fuzzy++;
@@ -780,6 +791,8 @@
       if (!punct && noEnd[normed[b - 1]]) c += 30;       // "... the | house"
       if (!punct && noStart[normed[b]]) c += 30;         // "ev | için"
       if (hasCues) c += words[b - 1].cueEnd ? -6 : 14;   // exact line times vs estimated
+      // With audio, a caption that starts right after a pause has an unambiguous start.
+      if (nextW.audio && prevW.audio && !words[b - 1].cueEnd) c += gap >= 0.06 ? -4 : AUDIO_NO_PAUSE;
       cost[b] = Math.max(0, c);
     }
 
@@ -892,6 +905,345 @@
   }
 
   // ---------------------------------------------------------------------------
+  // Audio-based sync refinement
+  // ---------------------------------------------------------------------------
+
+  var AUDIO_NO_PAUSE = 4;   // extra cost for starting a caption without a pause before it
+  var ENV_HOP = 0.0025;   // envelope resolution: 2.5 ms
+  var ENV_WIN = 4;        // RMS window = 4 hops = 10 ms
+
+  function percentile(sorted, p) { return sorted[Math.min(sorted.length - 1, Math.max(0, Math.round(p * (sorted.length - 1))))]; }
+
+  /**
+   * Analyse audio once: loudness envelope (dB every 2.5 ms), speech activity
+   * and candidate word onsets (points where sound rises after a pause or dip).
+   * `channels` is a Float32Array or an array of Float32Arrays (one per channel).
+   */
+  function analyzeAudio(channels, sampleRate) {
+    if (!Array.isArray(channels)) channels = [channels];
+    var nc = channels.length, n = channels[0].length;
+    var hop = Math.max(1, Math.round(sampleRate * ENV_HOP));
+    var frames = Math.floor(n / hop);
+    var e = new Float64Array(frames), f, i, c;
+    for (f = 0; f < frames; f++) {
+      var sum = 0, base = f * hop;
+      for (i = 0; i < hop; i++) {
+        var v = 0;
+        for (c = 0; c < nc; c++) v += channels[c][base + i];
+        v /= nc;
+        sum += v * v;
+      }
+      e[f] = sum;
+    }
+    return buildEnvelope(e, hop, sampleRate, n);
+  }
+
+  /**
+   * Analyse a WAV file straight from its bytes (no full decode, so long files
+   * stay light on memory).
+   */
+  function analyzeWav(buffer) {
+    var info = wavInfo(buffer);
+    var dv = info.dv, fmt = info.fmt;
+    var bps = fmt.bits / 8, nc = fmt.ch, stride = bps * nc;
+    var n = Math.floor(info.dataLen / stride);
+    var hop = Math.max(1, Math.round(fmt.rate * ENV_HOP));
+    var frames = Math.floor(n / hop);
+    var e = new Float64Array(frames);
+    var read = sampleReader(dv, fmt);
+    var o = info.dataOff;
+    for (var f = 0; f < frames; f++) {
+      var sum = 0;
+      for (var i = 0; i < hop; i++) {
+        var v = 0;
+        for (var c = 0; c < nc; c++, o += bps) v += read(o);
+        v /= nc;
+        sum += v * v;
+      }
+      e[f] = sum;
+    }
+    return buildEnvelope(e, hop, fmt.rate, n);
+  }
+
+  function buildEnvelope(e, hop, sampleRate, n) {
+    var frames = e.length, f, i;
+    var hopSec = hop / sampleRate;
+    if (frames < 50) throw new Error('The audio file is too short.');
+    var db = new Float32Array(frames);
+    for (f = 0; f < frames; f++) {
+      var s2 = 0, cnt = 0;
+      for (i = 0; i < ENV_WIN && f + i < frames; i++) { s2 += e[f + i]; cnt++; }
+      db[f] = 10 * Math.log10(s2 / (cnt * hop) + 1e-12);
+    }
+    var sm = new Float32Array(frames);
+    for (f = 0; f < frames; f++) sm[f] = (db[Math.max(0, f - 1)] + db[f] + db[Math.min(frames - 1, f + 1)]) / 3;
+
+    var sorted = Array.prototype.slice.call(sm).sort(function (a, b) { return a - b; });
+    var floor = percentile(sorted, 0.05), peak = percentile(sorted, 0.98);
+    var thr = Math.max(floor + 10, floor + 0.25 * (peak - floor));
+    var activeSum = new Float64Array(frames + 1);
+    for (f = 0; f < frames; f++) activeSum[f + 1] = activeSum[f] + (sm[f] > thr ? 1 : 0);
+
+    // Frame f covers [f, f + ENV_WIN) hops; its time is the window centre.
+    var timeOf = function (fr) { return (fr + ENV_WIN / 2) * hopSec; };
+
+    // Candidate onsets: after every valley (local minimum) at least 3 dB deep.
+    var R = 4, CTX = 40, onsets = [];
+    for (f = R; f < frames - R; f++) {
+      var isMin = true;
+      for (i = f - R; i <= f + R; i++) if (sm[i] < sm[f] || (sm[i] === sm[f] && i < f)) { isMin = false; break; }
+      if (!isMin) continue;
+      var lm = -Infinity, rm = -Infinity;
+      for (i = Math.max(0, f - CTX); i < f; i++) if (sm[i] > lm) lm = sm[i];
+      for (i = f + 1; i <= Math.min(frames - 1, f + CTX); i++) if (sm[i] > rm) rm = sm[i];
+      // How much the sound rises after the valley (after a silence, the left side is only noise).
+      var depth = rm - sm[f];
+      if (depth < 3 || rm < thr) continue;
+      var level = Math.min(sm[f] + Math.max(6, 0.3 * depth), rm - 1);
+      var o = f;
+      while (o < frames - 1 && sm[o] < level) o++;
+      var frac = o > f && sm[o] !== sm[o - 1] ? (level - sm[o - 1]) / (sm[o] - sm[o - 1]) : 0;
+      var t = timeOf(o - 1 + frac);
+      var strength = Math.min(depth, 30) / 10;
+      var last = onsets[onsets.length - 1];
+      if (last && t - last.t < 0.012) { if (strength > last.s) { last.t = t; last.s = strength; } }
+      else onsets.push({ t: t, s: strength });
+    }
+
+    return {
+      hopSec: hopSec, duration: n / sampleRate, onsets: onsets, floor: floor, peak: peak,
+      // seconds of speech between two times
+      voiced: function (a, b) {
+        var fa = Math.max(0, Math.min(frames, Math.round(a / hopSec - ENV_WIN / 2)));
+        var fb = Math.max(0, Math.min(frames, Math.round(b / hopSec - ENV_WIN / 2)));
+        return fb > fa ? (activeSum[fb] - activeSum[fa]) * hopSec : 0;
+      },
+      // last moment of speech before time b (but not before a)
+      speechEndBefore: function (a, b) {
+        var fa = Math.max(0, Math.round(a / hopSec - ENV_WIN / 2));
+        var fb = Math.min(frames - 1, Math.round(b / hopSec - ENV_WIN / 2));
+        for (var q = fb; q > fa; q--) if (sm[q] > thr) return timeOf(q) + hopSec * ENV_WIN / 2;
+        return a;
+      }
+    };
+  }
+
+  function onsetsBetween(env, a, b) {
+    var out = [], list = env.onsets;
+    var lo = 0, hi = list.length;
+    while (lo < hi) { var mid = (lo + hi) >> 1; if (list[mid].t < a) lo = mid + 1; else hi = mid; }
+    for (var k = lo; k < list.length && list[k].t < b; k++) out.push(list[k]);
+    return out;
+  }
+
+  /**
+   * Re-time the words of one subtitle line from the audio: choose a start for
+   * every word among the detected onsets (or a 20 ms grid where speech flows
+   * without a dip), so that word lengths match their syllable counts and word
+   * starts fall on real rises in the sound. Dynamic programming, optimal.
+   */
+  function alignLineToAudio(ws, env, S, E, lang) {
+    var m = ws.length;
+    var GRID = 0.02, ALPHA = 6.0, BETA = 1.0, GAMMA = 0.7, SIGMA0 = 0.12;
+    var lo = Math.max(0, S - 0.3), hi = E;
+    var real = onsetsBetween(env, lo, hi);
+    var pts = real.map(function (o) { return { t: o.t, s: o.s }; });
+    var ri = 0;
+    for (var g = lo; g < hi; g += GRID) {
+      while (ri < real.length && real[ri].t < g - 0.01) ri++;
+      if (ri < real.length && Math.abs(real[ri].t - g) < 0.01) continue;
+      pts.push({ t: g, s: 0 });
+    }
+    pts.sort(function (a, b) { return a.t - b.t; });
+    var P = pts.length;
+    if (P < m) return false;
+
+    var sw = ws.map(function (w) { return speechWeight(w.text, true, lang); });
+    var syl = ws.map(function (w) { return countSyllables(w.text, lang); });
+    // A word of n syllables should contain about n - 1 rises in loudness.
+    var pref = new Float64Array(P + 1);
+    for (var q = 0; q < P; q++) pref[q + 1] = pref[q] + Math.min(1, pts[q].s / 1.5);
+    var inner = function (i0, j0) { return j0 > i0 + 1 ? pref[j0] - pref[i0 + 1] : 0; };
+    var SW = sw.reduce(function (a, b) { return a + b; }, 0);
+    var Vtot = Math.max(env.voiced(S, E), 0.06 * m);
+    var D = sw.map(function (x) { return Vtot * x / SW; });
+    var durCost = function (a, b, k) {
+      var r = Math.log((env.voiced(a, b) + 0.04) / (D[k] + 0.04));
+      return ALPHA * r * r;
+    };
+    var wordCost = function (i0, j0, k) {
+      var d = inner(i0, j0) - (syl[k] - 1);
+      return durCost(pts[i0].t, pts[j0].t, k) + GAMMA * d * d;
+    };
+
+    var cost = [], back = [], j, i, k;
+    cost[0] = new Float64Array(P);
+    for (j = 0; j < P; j++) {
+      var z = (pts[j].t - S) / SIGMA0;
+      cost[0][j] = z * z - BETA * pts[j].s;
+    }
+    for (k = 1; k < m; k++) {
+      cost[k] = new Float64Array(P).fill(Infinity);
+      back[k] = new Int32Array(P).fill(-1);
+      for (j = 0; j < P; j++) {
+        var bestC = Infinity, bestI = -1;
+        for (i = j - 1; i >= 0; i--) {
+          if (pts[j].t - pts[i].t < 0.05) continue;
+          if (cost[k - 1][i] === Infinity) continue;
+          var cc = cost[k - 1][i] + wordCost(i, j, k - 1);
+          if (cc < bestC) { bestC = cc; bestI = i; }
+        }
+        if (bestI >= 0) { cost[k][j] = bestC - BETA * pts[j].s; back[k][j] = bestI; }
+      }
+    }
+    var endBest = Infinity, endJ = -1;
+    for (j = 0; j < P; j++) {
+      if (cost[m - 1][j] === Infinity || pts[j].t > E - 0.03) continue;
+      var lastInner = pref[P] - pref[j + 1];
+      for (var q2 = P - 1; q2 > j && pts[q2].t >= E; q2--) lastInner -= Math.min(1, pts[q2].s / 1.5);
+      var dl = lastInner - (syl[m - 1] - 1);
+      var tc = cost[m - 1][j] + durCost(pts[j].t, E, m - 1) + GAMMA * dl * dl;
+      if (tc < endBest) { endBest = tc; endJ = j; }
+    }
+    if (endJ < 0) return false;
+    var idx = new Array(m);
+    idx[m - 1] = endJ;
+    for (k = m - 1; k > 0; k--) idx[k - 1] = back[k][idx[k]];
+    for (k = 0; k < m; k++) {
+      ws[k].start = pts[idx[k]].t;
+      ws[k].audio = true;
+    }
+    for (k = 0; k < m; k++) {
+      var nextStart = k < m - 1 ? ws[k + 1].start : E;
+      ws[k].end = Math.max(ws[k].start + 0.02, Math.min(nextStart, env.speechEndBefore(ws[k].start, nextStart)));
+    }
+    return true;
+  }
+
+  /**
+   * Improve word timings with the audio. Lines (SRT/VTT input) are re-timed
+   * word by word; word-level input is only nudged onto a clear onset nearby.
+   * Returns the number of words that were re-timed.
+   */
+  function refineWithAudio(words, env, lang) {
+    var changed = 0, i = 0, n = words.length;
+    var hasCues = words.some(function (w) { return w.cueStart; });
+    if (hasCues) {
+      while (i < n) {
+        var j = i + 1;
+        while (j < n && !words[j].cueStart) j++;
+        var line = words.slice(i, j);
+        var S = line[0].start, E = line[line.length - 1].end;
+        if (E <= env.duration && E > S && alignLineToAudio(line, env, S, E, lang)) changed += line.length;
+        i = j;
+      }
+    } else {
+      for (i = 0; i < n; i++) {
+        var w = words[i], best = null, bestScore = 0.3;
+        onsetsBetween(env, w.start - 0.1, w.start + 0.1).forEach(function (o) {
+          var z = (o.t - w.start) / 0.05;
+          var sc = o.s - z * z;
+          if (sc > bestScore) { bestScore = sc; best = o.t; }
+        });
+        var prevStart = i > 0 ? words[i - 1].start : -Infinity;
+        if (best !== null && best > prevStart + 0.03 && best < w.end) { w.start = best; w.audio = true; changed++; }
+      }
+    }
+    return changed;
+  }
+
+  function wavInfo(buffer) {
+    var ab = buffer instanceof ArrayBuffer ? buffer : buffer.buffer;
+    var dv = new DataView(ab, buffer instanceof ArrayBuffer ? 0 : buffer.byteOffset, buffer.byteLength);
+    var str = function (o, l) { var r = ''; for (var q = 0; q < l; q++) r += String.fromCharCode(dv.getUint8(o + q)); return r; };
+    if (dv.byteLength < 44 || (str(0, 4) !== 'RIFF' && str(0, 4) !== 'RF64') || str(8, 4) !== 'WAVE') {
+      throw new Error('Not a WAV file.');
+    }
+    var pos = 12, fmt = null, dataOff = -1, dataLen = 0;
+    while (pos + 8 <= dv.byteLength) {
+      var id = str(pos, 4), len = dv.getUint32(pos + 4, true);
+      if (id === 'fmt ') {
+        fmt = { tag: dv.getUint16(pos + 8, true), ch: dv.getUint16(pos + 10, true), rate: dv.getUint32(pos + 12, true), bits: dv.getUint16(pos + 22, true) };
+        if (fmt.tag === 0xFFFE && len >= 26) fmt.tag = dv.getUint16(pos + 32, true); // WAVE_FORMAT_EXTENSIBLE
+      } else if (id === 'data') {
+        dataOff = pos + 8;
+        dataLen = (len === 0xFFFFFFFF || dataOff + len > dv.byteLength) ? dv.byteLength - dataOff : len;
+        break;
+      }
+      pos += 8 + len + (len & 1);
+    }
+    if (!fmt || dataOff < 0) throw new Error('The WAV file has no audio data.');
+    if ([1, 3].indexOf(fmt.tag) < 0 || [8, 16, 24, 32, 64].indexOf(fmt.bits) < 0) {
+      throw new Error('Unsupported WAV encoding. Export the audio as 16- or 24-bit PCM WAV.');
+    }
+    return { dv: dv, fmt: fmt, dataOff: dataOff, dataLen: dataLen };
+  }
+
+  function sampleReader(dv, fmt) {
+    var bps = fmt.bits / 8;
+    if (fmt.tag === 3) return bps === 4 ? function (o) { return dv.getFloat32(o, true); } : function (o) { return dv.getFloat64(o, true); };
+    if (bps === 2) return function (o) { return dv.getInt16(o, true) / 32768; };
+    if (bps === 3) return function (o) { return (dv.getUint8(o) | (dv.getUint8(o + 1) << 8) | (dv.getInt8(o + 2) << 16)) / 8388608; };
+    if (bps === 4) return function (o) { return dv.getInt32(o, true) / 2147483648; };
+    return function (o) { return (dv.getUint8(o) - 128) / 128; };
+  }
+
+  /** Read a WAV file into channels of Float32 samples (used by tests/tools). */
+  function decodeWav(buffer) {
+    var info = wavInfo(buffer), fmt = info.fmt, read = sampleReader(info.dv, fmt);
+    var bps = fmt.bits / 8, frames = Math.floor(info.dataLen / (bps * fmt.ch));
+    var ch = [];
+    for (var c = 0; c < fmt.ch; c++) ch.push(new Float32Array(frames));
+    for (var f = 0, o = info.dataOff; f < frames; f++) {
+      for (c = 0; c < fmt.ch; c++, o += bps) ch[c][f] = read(o);
+    }
+    return { channels: ch, sampleRate: fmt.rate };
+  }
+
+  /**
+   * Find a constant shift between the transcript and the audio (e.g. the audio
+   * was exported from a slightly different start). Anchors are line starts
+   * (SRT) or word starts; returns seconds to ADD to the transcript, or 0.
+   */
+  function detectAudioOffset(words, env) {
+    var hasCues = words.some(function (w) { return w.cueStart; });
+    var anchors = words.map(function (w) { return { t: w.start, w: (!hasCues || w.cueStart) ? 1 : 0.25 }; });
+    var W = anchors.reduce(function (a, x) { return a + x.w; }, 0);
+    if (anchors.length < 8) return { offset: 0, confidence: 0 };
+    var list = env.onsets.map(function (o) { return o.t; });
+    var nearestDist = function (t) {
+      var lo = 0, hi = list.length;
+      while (lo < hi) { var mid = (lo + hi) >> 1; if (list[mid] < t) lo = mid + 1; else hi = mid; }
+      var d = Infinity;
+      if (lo < list.length) d = list[lo] - t;
+      if (lo > 0) d = Math.min(d, t - list[lo - 1]);
+      return d;
+    };
+    var score = function (off) {
+      var sc = 0;
+      for (var k = 0; k < anchors.length; k++) {
+        var d = nearestDist(anchors[k].t + off) / 0.03;
+        sc += anchors[k].w * Math.exp(-d * d);
+      }
+      return sc / W;
+    };
+    var best = 0, bestScore = score(0), off;
+    for (off = -3; off <= 3.0001; off += 0.01) {
+      var sc = score(off);
+      if (sc > bestScore) { bestScore = sc; best = off; }
+    }
+    var coarse = best;
+    for (off = coarse - 0.01; off <= coarse + 0.0101; off += 0.002) {
+      var sc2 = score(off);
+      if (sc2 > bestScore) { bestScore = sc2; best = off; }
+    }
+    var zero = score(0);
+    // Small differences are fixed word by word later; only correct a clear, real shift.
+    if (Math.abs(best) < 0.1 || bestScore < zero * 1.4 + 0.08) return { offset: 0, confidence: zero };
+    return { offset: Math.round(best * 1000) / 1000, confidence: bestScore };
+  }
+
+  // ---------------------------------------------------------------------------
   // Public API
   // ---------------------------------------------------------------------------
 
@@ -918,9 +1270,17 @@
   }
 
   /** Parse inputs into timed words (the slow part; cache the result). */
-  function prepareWords(timedText, scriptText) {
+  function prepareWords(timedText, scriptText, audioEnv, language) {
     var timed = parseTimedTranscript(timedText);
-    var result = { words: timed.words, format: timed.format, kind: timed.kind, alignment: null };
+    var result = { words: timed.words, format: timed.format, kind: timed.kind, alignment: null, audioWords: 0 };
+    if (audioEnv) {
+      var off = detectAudioOffset(timed.words, audioEnv);
+      if (off.offset) timed.words.forEach(function (w) { w.start += off.offset; w.end += off.offset; });
+      result.audioOffset = off.offset;
+      result.audioWords = refineWithAudio(timed.words, audioEnv, language || 'other');
+      var last = timed.words[timed.words.length - 1];
+      result.audioTooShort = last.end > audioEnv.duration + 1;
+    }
     if (scriptText && String(scriptText).trim()) {
       var al = alignScriptToTimings(parseScript(scriptText), timed.words);
       result.words = al.words;
@@ -936,7 +1296,7 @@
     var lang = LANGS[o.language];
     // Work on copies so cached words are never mutated.
     var ws = words.map(function (w) {
-      return { text: w.text, start: w.start, end: w.end, breakAfter: w.breakAfter, cueStart: w.cueStart, cueEnd: w.cueEnd };
+      return { text: w.text, start: w.start, end: w.end, breakAfter: w.breakAfter, cueStart: w.cueStart, cueEnd: w.cueEnd, audio: w.audio };
     });
     var hasCues = ws.some(function (w) { return w.cueEnd; });
     var B = buildBoundaries(ws, o, lang);
@@ -953,7 +1313,8 @@
       lines.forEach(function (l) { if (l.length > o.maxCharsPerLine && flags.indexOf('chars') < 0) flags.push('chars'); });
       return {
         words: cw, wordCount: cw.length, lines: lines, text: lines.join(' '), flags: flags,
-        estimatedStart: hasCues && !cw[0].cueStart
+        estimatedStart: hasCues && !cw[0].cueStart && !cw[0].audio,
+        audioSynced: !!cw[0].audio
       };
     });
     caps = finalizeTiming(caps, o);
@@ -974,7 +1335,7 @@
   }
 
   function generate(p) {
-    var prep = prepareWords(p.timedText, p.scriptText);
+    var prep = prepareWords(p.timedText, p.scriptText, p.audio || null, (p.options && p.options.language) || DEFAULTS.language);
     var res = buildCaptions(prep.words, p.options);
     res.format = prep.format;
     res.alignment = prep.alignment;
@@ -1003,6 +1364,12 @@
     norm: norm,
     parseTimestamp: parseTimestamp,
     decodeBytes: decodeBytes,
+    analyzeAudio: analyzeAudio,
+    analyzeWav: analyzeWav,
+    detectAudioOffset: detectAudioOffset,
+    refineWithAudio: refineWithAudio,
+    decodeWav: decodeWav,
+    countSyllables: countSyllables,
     parseTimedTranscript: parseTimedTranscript,
     parseScript: parseScript,
     alignScriptToTimings: alignScriptToTimings,
