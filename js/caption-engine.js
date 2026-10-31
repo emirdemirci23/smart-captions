@@ -1195,8 +1195,9 @@
     }
     groups.forEach(function (g) {
       var line = words.slice(g[0], g[1]);
-      var S = line[0].start, E = line[line.length - 1].end;
-      if (E > env.duration || E <= S) return;
+      var S = line[0].start, E = Math.min(line[line.length - 1].end, env.duration);
+      // Audio exports often stop right at the last sound: clamp instead of skipping.
+      if (S >= env.duration - 0.05 || E <= S) return;
       var priors = line.map(function (w) { return w.start; });
       var sigmas = line.map(function (w, q) {
         if (!hasCues) return q === 0 ? Math.max(SYNC.SIGMA_WORD, 0.15) : SYNC.SIGMA_WORD;

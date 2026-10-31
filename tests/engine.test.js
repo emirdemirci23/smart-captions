@@ -382,3 +382,12 @@ test('word-level transcript that is consistently late is corrected by the audio'
   assert.ok(s.median < 6, 'median ' + s.median.toFixed(1) + ' ms');
   assert.ok(s.avg < 20, 'average ' + s.avg.toFixed(1) + ' ms');
 });
+
+test('words at the very end are timed even if the audio stops slightly early', () => {
+  const truth = S.makeTruth(sampleText, 13, 'en');
+  const a = S.renderSpeech(truth, 7);
+  const cut = Math.floor((truth[truth.length - 1].start + 0.3) * a.sampleRate);
+  const env = E.analyzeAudio(a.samples.subarray(0, cut), a.sampleRate);
+  const p = E.prepareWords(JSON.stringify({ words: truth }), '', env, 'en');
+  assert.equal(p.audioWords, p.words.length);
+});

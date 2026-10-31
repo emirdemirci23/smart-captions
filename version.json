@@ -1,7 +1,7 @@
 {
-  "version": "1.3.1",
+  "version": "1.3.2",
   "date": "2026-10-31",
-  "notes": "Audio sync: robust word-level matching, lateness correction, pause-anchored phrase starts",
+  "notes": "Time the last words even when the audio file ends slightly early",
   "files": [
     "index.html",
     "css/style.css",
