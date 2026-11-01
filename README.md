@@ -5,6 +5,8 @@ A Premiere Pro panel that turns your transcript into **synchronized captions**. 
 - keeps every caption between a **minimum and maximum number of words**
 - **never splits phrases that belong together**: your own list (e.g. "thank you so much", "as well as"), names ("New York City"), numbers with units ("10 minutes"), titles ("Dr. Smith")
 - **ends a caption at a comma** (or ; : —) once it has the minimum number of words, instead of spilling into the next phrase
+- follows **Netflix-style subtitle rules**: max 42 characters per line, 2 lines (shorter top line preferred), 5/6 s – 7 s per caption and a **reading-speed limit** (English 20, Turkish 17 characters per second; too-fast captions are flagged)
+- **a new speaker always starts a new caption** (speakers from Premiere's transcript), optional **filler-word removal** ("um", "uh")
 - **natural phrasing** (subtitle grammar, English and Turkish): a built-in part-of-speech tagger keeps adjectives with their nouns ("strong black coffee"), articles and possessives with their words, prepositions with their objects, verbs with their helpers ("have been working", "to read") and phrasal verbs together ("pick up"), and breaks before "and / but / because / which", before prepositional phrases and between clauses
 - **detects the language** (English / Turkish) from the transcript automatically, so the right grammar rules are always used
 - with audio loaded, **starts new captions on stressed syllables** (words spoken louder than those around them) and avoids starting them on unstressed words; grammar rules still win
@@ -34,6 +36,8 @@ Load the **audio** too (a WAV of the same sequence or clip you transcribed: *Fil
 | SRT + audio | 37–39 ms (median 3 ms; captions starting mid-line where words run together can slip a syllable) |
 | Word-level JSON alone | 30–80 ms (as accurate as the transcription) |
 | SRT alone | 50–75 ms (captions starting mid-line are estimated, marked ≈) |
+
+The audio step also corrects a transcript that **drifts** (e.g. 24 vs 23.976 fps: 0.1 % ≈ 0.6 s per 10 minutes), never starts a word inside silence, and places word starts differently after silence (sharp rise) and between words that run together (gentle rise).
 
 The panel reports how many words start on a clear sound. A word can't be measured when it runs into the previous word without any break in the sound; its time then comes from the transcript. Transcripts that are consistently a bit late or early are corrected automatically.
 
@@ -92,6 +96,8 @@ node tools/benchmark-sync.js               # measure sync accuracy
 Opening `index.html` in a browser also works for previewing and downloading the SRT.
 
 ## Credits
+
+Turkish word lists (adjectives, adverbs, conjunctions, postpositions, verb roots) are derived from the [Zemberek-NLP](https://github.com/ahmetaa/zemberek-nlp) dictionary (Apache License 2.0, `js/data/`; rebuild with `node tools/build-tr-lexicon.js master-dictionary.dict`). The transcript reader follows Adobe's [Premiere transcript format spec](https://github.com/AdobeDocs/uxp-premiere-pro-samples). Ideas adapted from [stable-ts](https://github.com/jianfch/stable-ts) (no word starts in silence), [ffsubsync](https://github.com/smacke/ffsubsync) / alass (offset and drift correction) and the [Netflix Timed Text Style Guides](https://backlothelp.netflix.com/hc/en-us/articles/215758617).
 
 English part-of-speech tagging uses [compromise](https://github.com/spencermountain/compromise) by Spencer Kelly (MIT License, bundled in `js/vendor/`). On Premiere versions older than 2022 the panel falls back to its own built-in tagger.
 

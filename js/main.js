@@ -7,7 +7,7 @@
   var STORAGE_KEY = 'smartCaptions.settings.v1';
 
   var $ = function (id) { return document.getElementById(id); };
-  var NUM_FIELDS = ['minWords', 'maxWords', 'maxCharsPerLine', 'minDuration', 'maxDuration',
+  var NUM_FIELDS = ['minWords', 'maxWords', 'maxCharsPerLine', 'minDuration', 'maxDuration', 'maxCps',
     'pauseSplit', 'closeGapsUnder', 'gapFrames', 'offset'];
 
   var state = {
@@ -48,7 +48,8 @@
       closeGapsUnder: d.closeGapsUnder, gapFrames: 2, offset: 0, language: d.language,
       protectNames: d.protectNames, protectNumbers: d.protectNumbers,
       continuous: d.continuous, splitSentences: d.splitSentences,
-      breakAtCommas: d.breakAtCommas, phrasing: d.phrasing,
+      breakAtCommas: d.breakAtCommas, phrasing: d.phrasing, maxCps: d.maxCps,
+      splitSpeakers: d.splitSpeakers, removeFillers: d.removeFillers,
       phrases: '', alignMode: 'sequence', scriptText: ''
     };
   }
@@ -75,6 +76,8 @@
     s.splitSentences = $('splitSentences').checked;
     s.breakAtCommas = $('breakAtCommas').checked;
     s.phrasing = $('phrasing').checked;
+    s.splitSpeakers = $('splitSpeakers').checked;
+    s.removeFillers = $('removeFillers').checked;
     s.phrases = $('phrases').value;
     s.alignMode = $('alignMode').value;
     s.scriptText = $('scriptText').value;
@@ -99,6 +102,8 @@
     $('splitSentences').checked = !!s.splitSentences;
     $('breakAtCommas').checked = !!s.breakAtCommas;
     $('phrasing').checked = !!s.phrasing;
+    $('splitSpeakers').checked = !!s.splitSpeakers;
+    $('removeFillers').checked = !!s.removeFillers;
     updateDisabled();
     $('phrases').value = s.phrases;
     $('alignMode').value = s.alignMode;
@@ -136,6 +141,9 @@
       splitSentences: s.splitSentences,
       breakAtCommas: s.breakAtCommas,
       phrasing: s.phrasing,
+      maxCps: s.maxCps,
+      splitSpeakers: s.splitSpeakers,
+      removeFillers: s.removeFillers,
       phrases: s.phrases.split(/\r?\n/).map(function (l) { return l.trim(); }).filter(Boolean)
     };
   }
@@ -383,6 +391,7 @@
         meta.appendChild(el('span', 'flagtext', c.flags.map(function (f) {
           if (FLAG_TEXT[f]) return FLAG_TEXT[f];
           if (f.indexOf('long') === 0) return 'more words than the maximum' + f.slice(4);
+          if (f.indexOf('fast') === 0) return 'reading speed too fast (' + f.slice(5) + ')';
           return f;
         }).join(' · ')));
       }

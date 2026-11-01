@@ -115,6 +115,8 @@
             <div class="setting"><div class="setting-label"><span>Language rules</span><small>Grammar used for splitting</small></div><select id="language"></select></div>
             <div class="setting"><div class="setting-label"><span>Continuous</span><small>Each caption stays until the next one starts</small></div><label class="switch"><input type="checkbox" id="continuous"><span></span></label></div>
             <div class="setting"><div class="setting-label"><span>One sentence per caption</span><small>Short sentences may go under the minimum</small></div><label class="switch"><input type="checkbox" id="splitSentences"><span></span></label></div>
+            <div class="setting"><div class="setting-label"><span>New caption on speaker change</span><small>Uses the speakers in Premiere's transcript</small></div><label class="switch"><input type="checkbox" id="splitSpeakers"><span></span></label></div>
+            <div class="setting"><div class="setting-label"><span>Remove filler words</span><small>"um", "uh"… (tagged by Premiere)</small></div><label class="switch"><input type="checkbox" id="removeFillers"><span></span></label></div>
             <div class="setting"><div class="setting-label"><span>End at commas</span><small>Once the caption has the minimum words</small></div><label class="switch"><input type="checkbox" id="breakAtCommas"><span></span></label></div>
             <div class="setting"><div class="setting-label"><span>Natural phrasing</span><small>Subtitle grammar: adjectives stay with their nouns, "the" with its word, verbs with their helpers; breaks before "and", "because"…</small></div><label class="switch"><input type="checkbox" id="phrasing"><span></span></label></div>
           </details>
@@ -122,7 +124,8 @@
           <details class="group">
             <summary><span>Timing</span><svg class="chev"><use href="#i-chevron"/></svg></summary>
             <div class="setting"><div class="setting-label"><span>Min duration</span><small>Seconds a caption stays at least</small></div><input class="num" type="number" id="minDuration" min="0" max="10" step="0.1"></div>
-            <div class="setting"><div class="setting-label"><span>Max duration</span><small>Longer captions get split</small></div><input class="num" type="number" id="maxDuration" min="1" max="30" step="0.5"></div>
+            <div class="setting"><div class="setting-label"><span>Max duration</span><small>Longer captions get split (Netflix: 7 s)</small></div><input class="num" type="number" id="maxDuration" min="1" max="30" step="0.5"></div>
+            <div class="setting"><div class="setting-label"><span>Max reading speed</span><small>Characters per second · 0 = automatic (English 20, Turkish 17)</small></div><input class="num" type="number" id="maxCps" min="0" max="40" step="1"></div>
             <div class="setting"><div class="setting-label"><span>Split at pauses over</span><small>Seconds</small></div><input class="num" type="number" id="pauseSplit" min="0.1" max="10" step="0.1"></div>
             <div class="setting"><div class="setting-label"><span>Close gaps under</span><small>Seconds (when not continuous)</small></div><input class="num" type="number" id="closeGapsUnder" min="0" max="5" step="0.1"></div>
             <div class="setting"><div class="setting-label"><span>Gap between captions</span><small>Frames (when not continuous)</small></div><input class="num" type="number" id="gapFrames" min="0" max="30" step="1"></div>
@@ -177,6 +180,8 @@
   <!-- English grammar library (MIT, see js/vendor/compromise.LICENSE.txt). Needs Premiere 2022+;
        without it the panel falls back to its own tagger. -->
   <script src="js/vendor/compromise.js"></script>
+  <!-- Turkish word lists from Zemberek-NLP (Apache-2.0, see js/data/zemberek.LICENSE.txt) -->
+  <script src="js/data/tr-lexicon.js"></script>
   <script src="js/phrasing.js"></script>
   <script src="js/caption-engine.js"></script>
   <script src="js/updater.js"></script>

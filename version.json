@@ -1,11 +1,13 @@
 {
-  "version": "1.8.0",
+  "version": "1.9.0",
   "date": "2026-11-01",
-  "notes": "Better English grammar via the bundled compromise library (MIT); coordinated adjectives, 'going to', progressive verbs",
+  "notes": "Subtitle rules (reading speed, Netflix durations, speakers, fillers), drift correction, Turkish Zemberek lexicon, better onset timing",
   "files": [
     "index.html",
     "css/style.css",
     "js/caption-engine.js",
+    "js/data/tr-lexicon.js",
+    "js/data/zemberek.LICENSE.txt",
     "js/main.js",
     "js/phrasing.js",
     "js/updater.js",

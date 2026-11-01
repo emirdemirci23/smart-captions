@@ -45,13 +45,16 @@
     maxWords: 8,
     maxCharsPerLine: 42,
     maxLines: 2,
-    minDuration: 0.8,      // seconds a caption stays on screen at minimum
-    maxDuration: 6,        // seconds; longer captions are penalised
+    minDuration: 0.83,     // seconds a caption stays on screen at minimum (Netflix: 5/6 s)
+    maxDuration: 7,        // seconds; longer captions are penalised (Netflix: 7 s)
+    maxCps: 0,             // max reading speed in characters/second; 0 = language default (en 20, tr 17)
     continuous: true,      // every caption lasts until the next one starts
     splitSentences: true,  // never put the end of one sentence and the start of another together
     breakAtCommas: true,   // once a caption has minWords, it ends at the next comma (, ; : —)
     avoidWeakEdges: false, // (when phrasing is off) avoid ending on "of", "the"... / starting with "için"...
     phrasing: true,        // subtitle grammar: keep adjective+noun, article+noun, verb groups... together
+    splitSpeakers: true,   // a new speaker always starts a new caption
+    removeFillers: false,  // drop filler words ("um", "uh") tagged by Premiere or common English fillers
     closeGapsUnder: 0.5,   // (continuous off) gaps shorter than this are closed
     minGap: 0.067,         // seconds between consecutive captions (~2 frames)
     pauseSplit: 0.8,       // a pause longer than this inside a caption is penalised
@@ -116,7 +119,8 @@
         'ne yazık ki', 'öyle ki', 'değil mi', 'var mı', 'yok mu', 'tamam mı',
         'her zaman', 'her gün', 'hiçbir zaman', 'şu an', 'şu anda', 'bu sefer',
         'geçen yıl', 'gelecek yıl', 'iyi ki', 'hoş geldiniz', 'hoşça kalın',
-        'kendi kendine', 'bir de']
+        'kendi kendine', 'bir de', 'son derece', 'adım adım', 'yavaş yavaş', 'yine de', 'her neyse', 'bir an önce',
+        'en azından', 'bir türlü', 'ne var ki', 'bir yandan', 'öte yandan', 'diğer taraftan']
     },
     other: { name: 'Other (no grammar rules)', noEnd: [], noStart: [], phrases: [] }
   };
@@ -282,6 +286,7 @@
         } else {
           var prev = out[out.length - 1];
           prev.text += t.text;
+          if (t.eos) prev.eos = true;
           if (t.breakAfter && prev.breakAfter !== 'force') prev.breakAfter = t.breakAfter;
         }
         return;
@@ -381,14 +386,25 @@
   }
 
   /** Walk any JSON and collect arrays that match `pred`, grouped by path. */
-  function collectArrays(node, path, pred, out, depth) {
+  var SPEAKER_KEYS = ['speaker', 'speaker_id', 'speakerId', 'spk', 'speaker_label', 'speakerLabel'];
+  function speakerOf(o) {
+    if (!o || typeof o !== 'object' || Array.isArray(o)) return null;
+    for (var i = 0; i < SPEAKER_KEYS.length; i++) {
+      var v = o[SPEAKER_KEYS[i]];
+      if (typeof v === 'string' || typeof v === 'number') return String(v);
+    }
+    return null;
+  }
+
+  function collectArrays(node, path, pred, out, depth, speaker) {
     if (depth > 12 || !node || typeof node !== 'object') return;
     if (Array.isArray(node)) {
-      if (node.length && pred(node)) { out.push({ path: path, items: node }); return; }
-      node.forEach(function (child) { collectArrays(child, path + '[]', pred, out, depth + 1); });
+      if (node.length && pred(node)) { out.push({ path: path, items: node, speaker: speaker || null }); return; }
+      node.forEach(function (child) { collectArrays(child, path + '[]', pred, out, depth + 1, speaker); });
       return;
     }
-    Object.keys(node).forEach(function (k) { collectArrays(node[k], path + '.' + k, pred, out, depth + 1); });
+    var spk = speakerOf(node) || speaker;   // e.g. Premiere: segments[].speaker → its words
+    Object.keys(node).forEach(function (k) { collectArrays(node[k], path + '.' + k, pred, out, depth + 1, spk); });
   }
 
   function pickLargestGroup(found) {
@@ -400,21 +416,26 @@
     var best = null;
     order.forEach(function (p) { if (best === null || totals[p] > totals[best]) best = p; });
     var items = [];
-    found.forEach(function (f) { if (f.path === best) items = items.concat(f.items); });
+    found.forEach(function (f) {
+      if (f.path === best) f.items.forEach(function (o) { items.push({ o: o, speaker: f.speaker }); });
+    });
     return items;
   }
 
   function itemsToRaw(items) {
     var raw = [];
-    items.forEach(function (o) {
-      var text = getText(o);
+    items.forEach(function (it) {
+      var o = it.o, text = getText(o);
       if (typeof text !== 'string') return;
       var s = readTime(o, START_KEYS), e = readTime(o, END_KEYS), d = readTime(o, DUR_KEYS);
       raw.push({
         raw: text,
         start: s ? s.v : null,
         end: e ? e.v : (s && d ? s.v + d.v : null),
-        unit: (s && s.unit) || (e && e.unit) || (d && d.unit) || null
+        unit: (s && s.unit) || (e && e.unit) || (d && d.unit) || null,
+        speaker: speakerOf(o) || it.speaker || null,
+        eos: o.eos === true,                                                   // Premiere: end of sentence
+        filler: Array.isArray(o.tags) && o.tags.indexOf('filler') >= 0        // Premiere: "um", "uh"
       });
     });
     return raw;
@@ -457,11 +478,12 @@
         var prev = tokens[tokens.length - 1];   // continuation of previous word
         prev.text += t.trim();
         if (isNum(r.end)) prev.end = r.end;
+        if (r.eos) prev.eos = true;
         return;
       }
       var trimmed = t.trim();
       if (!trimmed) return;
-      tokens.push({ text: trimmed, start: r.start, end: r.end });
+      tokens.push({ text: trimmed, start: r.start, end: r.end, speaker: r.speaker, eos: r.eos, filler: r.filler });
     });
     return fillTimes(mergePunctTokens(tokens));
   }
@@ -483,7 +505,7 @@
         var d = span * weights[k] / total;
         // Time after a word's punctuation is a pause, not part of the word.
         var pause = (k < toks.length - 1 && /[^\p{L}\p{N}]$/u.test(t.text)) ? d * 0.35 : 0;
-        words.push({ text: t.text, start: t0, end: t0 + d - pause, cueStart: k === 0, cueEnd: k === toks.length - 1 });
+        words.push({ text: t.text, start: t0, end: t0 + d - pause, cueStart: k === 0, cueEnd: k === toks.length - 1, speaker: c.speaker || null });
         t0 += d;
       });
       words[words.length - 1].end = c.end;   // exact cue end
@@ -573,7 +595,7 @@
       collectArrays(json, '$', isCueArray, found, 0);
       if (found.length) {
         var cues = scaleTimes(itemsToRaw(pickLargestGroup(found)), 'cues')
-          .map(function (r) { return { start: r.start, end: r.end, text: r.raw }; });
+          .map(function (r) { return { start: r.start, end: r.end, text: r.raw, speaker: r.speaker }; });
         return { words: cuesToWords(cues), kind: 'cues', format: 'JSON with segment timings' };
       }
       throw new Error('No word or segment timings were found in this JSON file.');
@@ -715,6 +737,7 @@
         out[i - 1].anchored = timedWords[j - 1].anchored;
         out[i - 1].afterPause = timedWords[j - 1].afterPause;
         out[i - 1].stress = timedWords[j - 1].stress;
+        out[i - 1].speaker = timedWords[j - 1].speaker;
         out[i - 1].end = timedWords[j - 1].end;
         var sim = similarity(a[i - 1], b[j - 1]);
         if (sim === 1) exact++; else if (sim >= 0.5) fuzzy++;
@@ -726,6 +749,8 @@
       }
     }
     fillTimes(out);
+    // Script words without a match inherit the speaker of the word before them.
+    for (var q = 0; q < out.length; q++) if (!out[q].speaker && q > 0) out[q].speaker = out[q - 1].speaker;
     return { words: out, exact: exact, fuzzy: fuzzy, total: n, ratio: (exact + fuzzy) / n };
   }
 
@@ -756,7 +781,7 @@
 
     for (b = 1; b < n; b++) {
       var pw = words[b - 1].text;
-      sentEnd[b] = isSentenceEnd(pw) && !(/(\.\.\.|…)["'”’»)\]]*$/.test(pw) && /^["'“‘«(]*\p{Ll}/u.test(words[b].text)) ? 1 : 0;
+      sentEnd[b] = (words[b - 1].eos && !CLAUSE_RE.test(pw)) || isSentenceEnd(pw) && !(/(\.\.\.|…)["'”’»)\]]*$/.test(pw) && /^["'“‘«(]*\p{Ll}/u.test(words[b].text)) ? 1 : 0;
     }
 
     // 1. Keep-together phrases.
@@ -806,7 +831,8 @@
     // 4. Forced breaks win over everything: "|" in the script and, unless
     //    disabled, every sentence end (one sentence per caption).
     for (b = 1; b < n; b++) {
-      if (words[b - 1].breakAfter === 'force' || (o.splitSentences && sentEnd[b])) { forced[b] = 1; forbidden[b] = 0; }
+      var newSpeaker = o.splitSpeakers && words[b - 1].speaker && words[b].speaker && words[b - 1].speaker !== words[b].speaker;
+      if (words[b - 1].breakAfter === 'force' || (o.splitSentences && sentEnd[b]) || newSpeaker) { forced[b] = 1; forbidden[b] = 0; }
     }
 
     // "Hard edges": a caption bounded by these on both sides may be shorter than
@@ -868,6 +894,7 @@
     }
     var maxSpan = o.maxWords + longest;
     var maxChars = o.maxCharsPerLine * o.maxLines;
+    var maxCps = readingSpeedLimit(o);
     var target = (o.minWords + o.maxWords) / 2;
     var best = new Float64Array(n + 1).fill(Infinity);
     var prev = new Int32Array(n + 1);
@@ -898,6 +925,10 @@
         if (chars > maxChars) c += 15 * (chars - maxChars);
         var dur = words[j - 1].end - words[i].start;
         if (dur > o.maxDuration) c += 30 * (dur - o.maxDuration);
+        // Reading speed: characters per second over the time the caption is on screen.
+        var shown = shownDuration(words, i, j, o);
+        var cps = (chars + 1) / shown;
+        if (cps > maxCps) c += 6 * (cps - maxCps);
         c += 25 * sentInside + 6 * clauseInside;
         // The caption already had enough words when it reached a comma: it should have ended there.
         if (o.breakAtCommas && lastComma > 0 && lastComma - i >= o.minWords) c += 500;
@@ -913,6 +944,26 @@
     return spans.reverse();
   }
 
+  /** Netflix reading speeds: English adults 20 characters/second, most other languages 17. */
+  function readingSpeedLimit(o) {
+    var v = parseFloat(o.maxCps);
+    if (v > 0) return v;
+    return o.language === 'en' ? 20 : 17;
+  }
+
+  /** How long a caption made of words[i..j) will be on screen (estimate used while splitting). */
+  function shownDuration(words, i, j, o) {
+    var lastEnd = words[j - 1].end, start = words[i].start;
+    var end = lastEnd;
+    if (j < words.length) {
+      var nextStart = words[j].start;
+      end = o.continuous ? nextStart : Math.min(nextStart, lastEnd + Math.max(o.closeGapsUnder, 0));
+    } else {
+      end = lastEnd + 0.5;
+    }
+    return Math.max(end - start, o.minDuration, 0.1);
+  }
+
   function splitLines(ws, i0, B, o) {
     var text = ws.map(function (w) { return w.text; }).join(' ');
     if (o.maxLines < 2 || text.length <= o.maxCharsPerLine || ws.length < 2) return [text];
@@ -920,7 +971,8 @@
     for (var m = 1; m < ws.length; m++) {
       left += ws[m - 1].text.length + 1;
       var l1 = left, l2 = text.length - l1 - 1;
-      var c = Math.abs(l1 - l2) * 0.5 +
+      // Balanced lines, with a slight preference for a shorter top line ("bottom-heavy").
+      var c = Math.abs(l1 - l2) * 0.5 + (l1 > l2 ? (l1 - l2) * 0.3 : 0) +
         10 * (Math.max(0, l1 - o.maxCharsPerLine) + Math.max(0, l2 - o.maxCharsPerLine)) +
         (B.forbidden[i0 + m] ? 60 : 0) + B.cost[i0 + m] * 0.8;
       if (c < bestCost) { bestCost = c; bestM = m; }
@@ -976,6 +1028,95 @@
   var ENV_HOP = 0.0025;   // envelope resolution: 2.5 ms
   var ENV_WIN = 4;        // RMS window = 4 hops = 10 ms
 
+  /*
+   * Spectral change ("flux") from a small filter bank: words that run into each
+   * other often have no dip in loudness, but the sound changes character
+   * (different vowel, consonant, pitch). Six band-pass filters at ~16 kHz are
+   * far cheaper than an FFT and enough to see those changes.
+   */
+  var FLUX_BANDS = [[100, 300], [300, 700], [700, 1500], [1500, 3000], [3000, 5000], [5000, 7000]];
+
+  function makeFluxBank(sampleRate, hop, frames) {
+    var D = Math.max(1, Math.round(sampleRate / 16000)), fs = sampleRate / D;
+    var filters = [];
+    FLUX_BANDS.forEach(function (b) {
+      if (b[1] >= fs / 2) return;
+      var f0 = Math.sqrt(b[0] * b[1]), Q = f0 / (b[1] - b[0]);
+      var w0 = 2 * Math.PI * f0 / fs, alpha = Math.sin(w0) / (2 * Q), a0 = 1 + alpha;
+      filters.push({ b0: alpha / a0, b2: -alpha / a0, a1: -2 * Math.cos(w0) / a0, a2: (1 - alpha) / a0, x1: 0, x2: 0, y1: 0, y2: 0 });
+    });
+    var nb = filters.length;
+    var energy = new Float32Array(frames * nb);
+    var bandAcc = new Float64Array(nb);
+    var acc = 0, accN = 0, inHop = 0, frame = 0;
+    return {
+      nb: nb,
+      energy: energy,
+      push: function (v) {
+        acc += v;
+        if (++accN === D) {
+          var x = acc / D;
+          acc = 0; accN = 0;
+          for (var k = 0; k < nb; k++) {
+            var F = filters[k];
+            var y = F.b0 * x + F.b2 * F.x2 - F.a1 * F.y1 - F.a2 * F.y2;
+            F.x2 = F.x1; F.x1 = x; F.y2 = F.y1; F.y1 = y;
+            bandAcc[k] += y * y;
+          }
+        }
+        if (++inHop === hop) {
+          if (frame < frames) for (var k2 = 0; k2 < nb; k2++) { energy[frame * nb + k2] = bandAcc[k2]; bandAcc[k2] = 0; }
+          frame++; inHop = 0;
+        }
+      }
+    };
+  }
+
+  var FLUX_ENABLED = false, FLUX_MERGE = 0.025, FLUX_Z = 3, FLUX_LAG = 4;
+  var SUPPRESS_SILENCE = true;
+  var ONSET_MIN_DB = 2, ONSET_FRAC = 0.2;   // where on a gentle rise (no silence before) the word starts
+  var SHALLOW_DB = 6;                         // a dip this close to speech level counts as "no silence"
+
+  /** Peaks of the spectral change curve inside speech, as candidate word onsets. */
+  function spectralOnsets(bank, frames, sm, thr, hopSec, timeOf) {
+    var nb = bank.nb, E = bank.energy, f, k, i;
+    var W = ENV_WIN;
+    var L = new Float32Array(frames * nb);
+    for (f = 0; f < frames; f++) {
+      for (k = 0; k < nb; k++) {
+        var s2 = 0;
+        for (i = 0; i < W && f + i < frames; i++) s2 += E[(f + i) * nb + k];
+        L[f * nb + k] = 10 * Math.log10(s2 + 1e-10);
+      }
+    }
+    var flux = new Float32Array(frames);
+    for (f = FLUX_LAG; f < frames; f++) {
+      var sum = 0;
+      for (k = 0; k < nb; k++) { var d = L[f * nb + k] - L[(f - FLUX_LAG) * nb + k]; if (d > 0) sum += d; }
+      flux[f] = sum;
+    }
+    // robust scale from frames inside speech
+    var act = [];
+    for (f = 0; f < frames; f += 2) if (sm[f] > thr) act.push(flux[f]);
+    if (act.length < 50) return [];
+    act.sort(function (x, y) { return x - y; });
+    var med = act[act.length >> 1];
+    var dev = act.map(function (x) { return Math.abs(x - med); }).sort(function (x, y) { return x - y; });
+    var mad = dev[dev.length >> 1] * 1.4826 + 1e-6;
+    var out = [], R = 8;
+    for (f = R; f < frames - R; f++) {
+      if (sm[f] <= thr && sm[Math.min(frames - 1, f + 4)] <= thr) continue;   // inside speech only
+      var z = (flux[f] - med) / mad;
+      if (z < FLUX_Z) continue;
+      var isMax = true;
+      for (i = f - R; i <= f + R; i++) if (flux[i] > flux[f] || (flux[i] === flux[f] && i < f)) { isMax = false; break; }
+      if (!isMax) continue;
+      // the change sits between the two compared windows
+      out.push({ t: timeOf(f - FLUX_LAG / 2) - (W / 2) * hopSec + (FLUX_LAG / 2) * hopSec, s: Math.min(1.5, 0.4 + (z - FLUX_Z) * 0.15), pause: 0, flux: true });
+    }
+    return out;
+  }
+
   function percentile(sorted, p) { return sorted[Math.min(sorted.length - 1, Math.max(0, Math.round(p * (sorted.length - 1))))]; }
 
   /**
@@ -989,6 +1130,7 @@
     var hop = Math.max(1, Math.round(sampleRate * ENV_HOP));
     var frames = Math.floor(n / hop);
     var e = new Float64Array(frames), f, i, c;
+    var bank = FLUX_ENABLED ? makeFluxBank(sampleRate, hop, frames) : null;
     for (f = 0; f < frames; f++) {
       var sum = 0, base = f * hop;
       for (i = 0; i < hop; i++) {
@@ -996,10 +1138,11 @@
         for (c = 0; c < nc; c++) v += channels[c][base + i];
         v /= nc;
         sum += v * v;
+        if (bank) bank.push(v);
       }
       e[f] = sum;
     }
-    return buildEnvelope(e, hop, sampleRate, n);
+    return buildEnvelope(e, hop, sampleRate, n, bank);
   }
 
   /**
@@ -1014,6 +1157,7 @@
     var hop = Math.max(1, Math.round(fmt.rate * ENV_HOP));
     var frames = Math.floor(n / hop);
     var e = new Float64Array(frames);
+    var bank = FLUX_ENABLED ? makeFluxBank(fmt.rate, hop, frames) : null;
     var read = sampleReader(dv, fmt);
     var o = info.dataOff;
     for (var f = 0; f < frames; f++) {
@@ -1023,13 +1167,14 @@
         for (var c = 0; c < nc; c++, o += bps) v += read(o);
         v /= nc;
         sum += v * v;
+        if (bank) bank.push(v);
       }
       e[f] = sum;
     }
-    return buildEnvelope(e, hop, fmt.rate, n);
+    return buildEnvelope(e, hop, fmt.rate, n, bank);
   }
 
-  function buildEnvelope(e, hop, sampleRate, n) {
+  function buildEnvelope(e, hop, sampleRate, n, bank) {
     var frames = e.length, f, i;
     var hopSec = hop / sampleRate;
     if (frames < 50) throw new Error('The audio file is too short.');
@@ -1063,7 +1208,10 @@
       // How much the sound rises after the valley (after a silence, the left side is only noise).
       var depth = rm - sm[f];
       if (depth < 3 || rm < thr) continue;
-      var level = Math.min(sm[f] + Math.max(6, 0.3 * depth), rm - 1);
+      // After silence the rise starts from the noise floor: +6 dB marks the start well.
+      // A shallow dip between two words rises gently: use a fraction of the rise instead.
+      var shallow = sm[f] > thr - SHALLOW_DB;
+      var level = Math.min(sm[f] + (shallow ? Math.max(ONSET_MIN_DB, ONSET_FRAC * depth) : Math.max(6, 0.3 * depth)), rm - 1);
       var o = f;
       while (o < frames - 1 && sm[o] < level) o++;
       var frac = o > f && sm[o] !== sm[o - 1] ? (level - sm[o - 1]) / (sm[o] - sm[o - 1]) : 0;
@@ -1077,8 +1225,22 @@
       else onsets.push({ t: t, s: strength, pause: pause });
     }
 
+    // Spectral onsets: where the sound changes character without a dip in loudness.
+    var fluxOnsets = bank && bank.nb ? spectralOnsets(bank, frames, sm, thr, hopSec, timeOf) : [];
+    if (FLUX_ENABLED && fluxOnsets.length) {
+      var merged = [], a = 0, bIdx = 0;
+      fluxOnsets.forEach(function (fo) {
+        // keep only where no loudness onset is close by
+        while (a < onsets.length && onsets[a].t < fo.t - FLUX_MERGE) a++;
+        if (a < onsets.length && Math.abs(onsets[a].t - fo.t) <= FLUX_MERGE) return;
+        if (a > 0 && Math.abs(onsets[a - 1].t - fo.t) <= FLUX_MERGE) return;
+        merged.push(fo);
+      });
+      onsets = onsets.concat(merged).sort(function (x, y) { return x.t - y.t; });
+    }
+
     return {
-      hopSec: hopSec, duration: n / sampleRate, onsets: onsets, floor: floor, peak: peak,
+      hopSec: hopSec, duration: n / sampleRate, onsets: onsets, floor: floor, peak: peak, fluxCount: fluxOnsets.length,
       // seconds of speech between two times
       voiced: function (a, b) {
         var fa = Math.max(0, Math.min(frames, Math.round(a / hopSec - ENV_WIN / 2)));
@@ -1135,6 +1297,8 @@
     for (var g = lo; g < hi; g += GRID) {
       while (ri < real.length && real[ri].t < g - 0.01) ri++;
       if (ri < real.length && Math.abs(real[ri].t - g) < 0.01) continue;
+      // stable-ts style: a word can't start in silence (only real onsets may follow a pause)
+      if (SUPPRESS_SILENCE && env.voiced(g, g + 0.03) === 0) continue;
       pts.push({ t: g, s: 0, pause: 0 });
     }
     pts.sort(function (a, b) { return a.t - b.t; });
@@ -1348,6 +1512,59 @@
    * was exported from a slightly different start). Anchors are line starts
    * (SRT) or word starts; returns seconds to ADD to the transcript, or 0.
    */
+  var DRIFT_ENABLED = true;
+
+  /**
+   * Transcript and audio running at slightly different speeds (e.g. 24 vs
+   * 23.976 fps) drift apart over time. Estimate the shift in 40 s windows,
+   * fit a straight line through them (Theil–Sen, robust to bad windows) and
+   * return { slope, intercept } so that audioTime = t + intercept + slope * t.
+   */
+  function detectDrift(words, env) {
+    if (words.length < 60) return null;
+    var span = words[words.length - 1].start - words[0].start;
+    if (span < 120) return null;                       // too short for drift to matter
+    var list = env.onsets.filter(function (o) { return o.pause >= 0.08; }).map(function (o) { return o.t; });
+    if (list.length < 20) return null;
+    var nearest = function (t) {
+      var lo = 0, hi = list.length;
+      while (lo < hi) { var mid = (lo + hi) >> 1; if (list[mid] < t) lo = mid + 1; else hi = mid; }
+      var d = Infinity;
+      if (lo < list.length) d = list[lo] - t;
+      if (lo > 0 && t - list[lo - 1] < Math.abs(d)) d = list[lo - 1] - t;
+      return d;
+    };
+    var starts = words.filter(function (w, i) { return i === 0 || w.start - words[i - 1].end > 0.12; }).map(function (w) { return w.start; });
+    var pts = [], WIN = 40;
+    for (var w0 = starts[0]; w0 < starts[starts.length - 1]; w0 += WIN / 2) {
+      var inWin = starts.filter(function (t) { return t >= w0 && t < w0 + WIN; });
+      if (inWin.length < 6) continue;
+      var best = 0, bestScore = -1, second = -1;
+      var scores = [];
+      for (var off = -1.5; off <= 1.5001; off += 0.01) {
+        var sc = 0;
+        for (var k = 0; k < inWin.length; k++) { var d = nearest(inWin[k] + off) / 0.03; sc += Math.exp(-d * d); }
+        scores.push([off, sc]);
+        if (sc > bestScore) { bestScore = sc; best = off; }
+      }
+      scores.forEach(function (x) { if (Math.abs(x[0] - best) > 0.1 && x[1] > second) second = x[1]; });
+      if (bestScore / inWin.length < 0.45 || bestScore < second * 1.3) continue;   // unclear window
+      pts.push([w0 + WIN / 2, best]);
+    }
+    if (pts.length < 4) return null;
+    var slopes = [];
+    for (var a = 0; a < pts.length; a++) for (var b = a + 1; b < pts.length; b++) {
+      if (pts[b][0] - pts[a][0] > 30) slopes.push((pts[b][1] - pts[a][1]) / (pts[b][0] - pts[a][0]));
+    }
+    if (!slopes.length) return null;
+    var slope = median(slopes);
+    var intercept = median(pts.map(function (p) { return p[1] - slope * p[0]; }));
+    var resid = median(pts.map(function (p) { return Math.abs(p[1] - (intercept + slope * p[0])); }));
+    // Only correct a clear, consistent drift (> 0.02 %, i.e. > 0.12 s over 10 minutes).
+    if (Math.abs(slope) < 0.0002 || resid > 0.05 || Math.abs(slope * span) < 0.08) return null;
+    return { slope: slope, intercept: intercept, windows: pts.length };
+  }
+
   function detectAudioOffset(words, env) {
     var hasCues = words.some(function (w) { return w.cueStart; });
     var anchors = words.map(function (w) { return { t: w.start, w: (!hasCues || w.cueStart) ? 1 : 0.25 }; });
@@ -1404,7 +1621,7 @@
     var o = {}, k;
     for (k in DEFAULTS) o[k] = DEFAULTS[k];
     for (k in (opts || {})) if (opts[k] !== undefined && opts[k] !== null && opts[k] !== '') o[k] = opts[k];
-    ['minWords', 'maxWords', 'maxCharsPerLine', 'maxLines', 'minDuration', 'maxDuration',
+    ['minWords', 'maxWords', 'maxCharsPerLine', 'maxLines', 'minDuration', 'maxDuration', 'maxCps',
       'closeGapsUnder', 'minGap', 'pauseSplit', 'offset', 'frameDuration'].forEach(function (key) {
       var v = parseFloat(o[key]);
       o[key] = isFinite(v) ? v : DEFAULTS[key];
@@ -1420,6 +1637,8 @@
     o.breakAtCommas = !!o.breakAtCommas;
     o.avoidWeakEdges = !!o.avoidWeakEdges;
     o.phrasing = !!o.phrasing;
+    o.splitSpeakers = !!o.splitSpeakers;
+    o.removeFillers = !!o.removeFillers;
     if (o.language !== 'auto' && !LANGS[o.language]) o.language = 'other';
     if (!Array.isArray(o.phrases)) o.phrases = o.language === 'auto' ? null : LANGS[o.language].phrases.slice();
     return o;
@@ -1434,6 +1653,14 @@
       var off = detectAudioOffset(timed.words, audioEnv);
       if (off.offset) timed.words.forEach(function (w) { w.start += off.offset; w.end += off.offset; });
       result.audioOffset = off.offset;
+      var drift = DRIFT_ENABLED ? detectDrift(timed.words, audioEnv) : null;
+      if (drift) {
+        timed.words.forEach(function (w) {
+          w.start += drift.intercept + drift.slope * w.start;
+          w.end += drift.intercept + drift.slope * w.end;
+        });
+      }
+      result.audioDrift = drift;
       result.audioWords = refineWithAudio(timed.words, audioEnv, language || 'other');
       result.audioAnchored = timed.words.filter(function (w) { return w.anchored; }).length;
       measureStress(timed.words, audioEnv);
@@ -1465,8 +1692,19 @@
     var lang = LANGS[o.language];
     // Work on copies so cached words are never mutated.
     var ws = words.map(function (w) {
-      return { text: w.text, start: w.start, end: w.end, breakAfter: w.breakAfter, cueStart: w.cueStart, cueEnd: w.cueEnd, audio: w.audio, anchored: w.anchored, afterPause: w.afterPause, stress: w.stress };
+      return { text: w.text, start: w.start, end: w.end, breakAfter: w.breakAfter, cueStart: w.cueStart, cueEnd: w.cueEnd, audio: w.audio, anchored: w.anchored, afterPause: w.afterPause, stress: w.stress,
+        speaker: w.speaker, eos: w.eos, filler: w.filler };
     });
+    if (o.removeFillers) {
+      ws = ws.filter(function (w, i) {
+        var filler = w.filler || /^[("']*(um+|uh+|uhm+|erm+|er|hmm+|mm+|ıı+|ee+h?)[,.!?…)"']*$/i.test(w.text);
+        if (filler && i > 0 && SENT_END_RE.test(w.text) && !hasTrailingPunct(ws[i - 1].text)) {
+          ws[i - 1].text += w.text.replace(/^[^.!?…]*/, '');   // keep the sentence end: "so um." → "so."
+        }
+        return !filler;
+      });
+      if (!ws.length) throw new Error('Only filler words were found.');
+    }
     var hasCues = ws.some(function (w) { return w.cueEnd; });
     var B = buildBoundaries(ws, o, lang);
     var caps = segment(ws, B, o).map(function (sp) {
@@ -1480,6 +1718,8 @@
         flags.push('long' + (why.length ? ' (kept together: ' + why.join(', ') + ')' : ''));
       }
       lines.forEach(function (l) { if (l.length > o.maxCharsPerLine && flags.indexOf('chars') < 0) flags.push('chars'); });
+      var cpsNow = lines.join(' ').length / shownDuration(ws, sp[0], sp[1], o);
+      if (cpsNow > readingSpeedLimit(o) + 0.5) flags.push('fast ' + cpsNow.toFixed(0) + ' cps');
       return {
         words: cw, wordCount: cw.length, lines: lines, text: lines.join(' '), flags: flags,
         estimatedStart: hasCues && !cw[0].cueStart && !cw[0].audio,
@@ -1544,6 +1784,7 @@
     refineWithAudio: refineWithAudio,
     decodeWav: decodeWav,
     countSyllables: countSyllables,
+    _flux: function (cfg) { if (cfg) { if ('enabled' in cfg) FLUX_ENABLED = cfg.enabled; if (cfg.z) FLUX_Z = cfg.z; if (cfg.lag) FLUX_LAG = cfg.lag; if (cfg.merge) FLUX_MERGE = cfg.merge; if (cfg.minDb !== undefined) ONSET_MIN_DB = cfg.minDb; if (cfg.frac !== undefined) ONSET_FRAC = cfg.frac; if (cfg.shallow !== undefined) SHALLOW_DB = cfg.shallow; if (cfg.suppress !== undefined) SUPPRESS_SILENCE = cfg.suppress; if (cfg.drift !== undefined) DRIFT_ENABLED = cfg.drift; } return { enabled: FLUX_ENABLED, z: FLUX_Z, lag: FLUX_LAG, merge: FLUX_MERGE }; },
     detectLanguage: detectLanguage,
     SYNC: SYNC,
     parseTimedTranscript: parseTimedTranscript,

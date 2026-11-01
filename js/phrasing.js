@@ -80,7 +80,15 @@
       'proper fair tough rough bright brilliant calm angry afraid alive alone aware glad sorry tired nervous proud ' +
       'excellent fantastic incredible ideal obvious ordinary rare regular secret silent simple solid stable ' +
       'strict sudden sweet tall tight tough tricky useful useless valuable vast wild wise worried young massive ' +
-      'gentle honest humble kind polite rude brave clever cute fancy friendly helpful hungry lazy mad quick ready'),
+      'gentle honest humble kind polite rude brave clever cute fancy friendly helpful hungry lazy mad quick ready ' +
+      'lush cozy cosy elaborate accurate readable decent sturdy sleek minimalist remote dusty leather handwritten ' +
+      'sleepy windy delicious homemade adorable annual crisp tasty juicy crunchy spicy salty sour bitter fluffy ' +
+      'shiny glossy rusty muddy foggy rainy sunny snowy stormy chilly freezing boiling icy humid dry wet ' +
+      'ancient brand-new vintage fragile sturdy loyal generous greedy curious anxious eager keen jealous ' +
+      'gorgeous stunning hilarious awkward bizarre peaceful chaotic noisy crowded empty narrow steep shallow ' +
+      'rapid sharp subtle vivid bold dull faint harsh mild rich raw ripe rotten stale tender tight loose ' +
+      'senior junior elderly teenage adult urban rural tropical arctic coastal domestic foreign global ' +
+      'legal illegal medical financial political military industrial cultural environmental emotional'),
     // common verbs (base forms); -s/-ed/-ing forms are recognised from these
     VERB: set('be have do say get make go know take see come think look want give use find tell ask work seem feel ' +
       'try leave call keep let begin show hear play run move like live believe hold bring happen write provide sit ' +
@@ -359,7 +367,9 @@
     CONJ: set('ve veya ya yahut ama fakat ancak lakin çünkü ki hem de da yani sonra ayrıca oysa halbuki eğer ' +
       'madem rağmen'),
     POSTP: set('için gibi kadar göre karşı rağmen beri dolayı doğru dek değin üzere ile sonra önce itibaren boyunca ' +
-      'olarak'),
+      'olarak üzerinde üzerine üzerinden hakkında sırasında yüzünden sayesinde karşısında altında altına içinde ' +
+      'içine dışında yanında yanına önünde arkasında arasında arasına sonunda başında ortasında etrafında ' +
+      'nedeniyle aracılığıyla tarafından'),
     PART: set('mi mı mu mü misin mısın musun müsün miyim mıyım muyum müyüm miyiz mıyız muyuz müyüz misiniz mısınız ' +
       'musunuz müsünüz midir mıdır mudur müdür miydi mıydı muydu müydü değil değilim değilsin değiliz değilsiniz ' +
       'değiller değildi değilmiş de da dahi bile'),
@@ -374,7 +384,34 @@
     ADJ_SUFFIX: /(lı|li|lu|lü|sız|siz|suz|süz|sal|sel|ki|daki|deki|taki|teki|ıcı|ici|ucu|ücü)$/
   };
 
-  function tagTR(words) {
+  /** Zemberek-derived Turkish word lists (js/data/tr-lexicon.js), loaded lazily. */
+  var trLex = null;
+  function getTRLexicon(opts) {
+    if (opts && opts.engine === 'own') return null;
+    if (trLex !== null) return trLex || null;
+    var data = null;
+    if (typeof SmartTRLexicon === 'object' && SmartTRLexicon) data = SmartTRLexicon;
+    else if (typeof module === 'object' && typeof require === 'function') {
+      try { data = require('./data/tr-lexicon.js'); } catch (e) { data = null; }
+    }
+    trLex = data ? { adj: set(data.adj), adv: set(data.adv), conj: set(data.conj), postp: set(data.postp),
+      det: set(data.det), pron: set(data.pron), verb: set(data.verb) } : false;
+    return trLex || null;
+  }
+
+  var TR_VERB_SUFFIX = /^(y?(ı|i|u|ü|a|e)?yor|(y)?(acak|ecek|acağ|eceğ)|(d|t)(ı|i|u|ü)|m(ı|i|u|ü)ş|ma(lı|z|dı|mış|yacak|sın)|me(li|z|di|miş|yecek|sin)|(a|e|ı|i|u|ü)?r(ım|im|um|üm|sın|sin|sun|sün|ız|iz|uz|üz|lar|ler|dı|di|du|dü|mış|miş)?$|(y)?abil|(y)?ebil|sa(m|n|k|nız|lar)?$|se(m|n|k|niz|ler)?$|(y)?(alım|elim)$|(y)?(ın|in|un|ün|ınız|iniz)$|mak|mek)/;
+
+  /** "göstereceğim" → root "göster" + a verb ending. */
+  function isTurkishVerb(w, lex) {
+    if (!lex) return false;
+    for (var k = Math.min(w.length - 1, 10); k >= 3; k--) {
+      if (lex.verb[w.slice(0, k)] && TR_VERB_SUFFIX.test(w.slice(k))) return true;
+    }
+    return false;
+  }
+
+  function tagTR(words, opts) {
+    var lex = getTRLexicon(opts);
     var low = words.map(function (w) { return clean(w.text).replace(/'.*$/, ''); });
     return low.map(function (w, i) {
       var raw = words[i].text;
@@ -388,12 +425,24 @@
       if (TR.INTENS[w]) return 'INTENS';
       if (TR.ADJ[w]) return 'ADJ';
       if (TR.ADV[w]) return 'ADV';
+      if (lex) {
+        if (lex.det[w]) return 'DET';
+        if (lex.adj[w] && !lex.verb[w]) return 'ADJ';
+        if (lex.adv[w]) return 'ADV';
+        if (lex.conj[w] && w.length > 2) return 'CONJ';
+      }
       if (i > 0 && /^\p{Lu}/u.test(raw) && !/[.!?…]["'”’)]*$/.test(words[i - 1].text)) return 'PROPN';
-      if (TR.VERB_END.test(w) && w.length > 4) return 'V';
+      // participles used as adjectives: "gelen adam", "okuduğum kitap", "annemin yaptığı turta"
+      // (but not the ablative "-dan/-den/-tan/-ten": "barınaktan")
+      if (/(dığı|diği|duğu|düğü|tığı|tiği|tuğu|tüğü|dığım|diğim|duğum|düğüm|dığın|diğin|duğun|düğün|dığımız|diğimiz)$/.test(w) && w.length > 4) return 'PTCP';
+      if (/[^dt](an|en)$|yan$|yen$/.test(w) && !/(dan|den|tan|ten)$/.test(w) && w.length > 4 && isTurkishVerb(w.replace(/y?(an|en)$/, '') + 'mak', lex)) return 'PTCP';
+      // "-malı/-meli": verb ("yapmalı" = must do) only after a real verb root; else "with …" ("elmalı" = with apples)
+      var mustVerb = /(malı|meli)$/.test(w) && w.length - 4 >= 3 && lex && lex.verb[w.slice(0, -4)];
+      if (TR.ADJ_SUFFIX.test(w) && w.length > 4 && !mustVerb) return 'ADJ';
+      if ((TR.VERB_END.test(w) && w.length > 4) || isTurkishVerb(w, lex)) return 'V';
       if (TR.ADJ_SUFFIX.test(w) && w.length > 4) return 'ADJ';
       if (TR.GEN.test(w) && w.length > 4) return 'GEN';
-      // participles used as adjectives: "gelen adam", "okuduğum kitap"
-      if (/(an|en|dık|dik|duk|dük|tık|tik|tuk|tük|dığı|diği|duğu|düğü|tığı|tiği|tuğu|tüğü|dığım|diğim|duğum|düğüm)$/.test(w) && w.length > 4) return 'PTCP';
+      if (/[^dt](an|en)$/.test(w) && !/(dan|den|tan|ten)$/.test(w) && w.length > 5) return 'PTCP';
       return 'N';
     });
   }
@@ -431,7 +480,7 @@
     if (lang !== 'en' && lang !== 'tr') return { tags: null, cohesion: coh };
     var key = lang + '|' + (opts && opts.engine || '') + '|' + words.map(function (w) { return w.text; }).join(' ');
     if (cache.key === key) return cache.value;
-    var tags = lang === 'en' ? tagEN(words, opts) : tagTR(words);
+    var tags = lang === 'en' ? tagEN(words, opts) : tagTR(words, opts);
     var low = words.map(function (w) { return clean(w.text); });
     for (var b = 1; b < n; b++) {
       var L = tags[b - 1], R = tags[b];

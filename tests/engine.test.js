@@ -533,3 +533,101 @@ test('hand-marked phrases stay whole (library + rules, and own tagger as fallbac
   assert.equal(count('library'), 0, 'no hand-marked phrase split at min 3/max 6 and min 2/max 8');
   assert.ok(count('own') <= 6, 'fallback tagger still keeps most phrases');
 });
+
+// ---------------------------------------------------------------------------
+// Premiere transcript format (Adobe transcript_format_spec.json)
+// ---------------------------------------------------------------------------
+function premiereJSON(segments) {
+  const speakers = [...new Set(segments.map((g) => g.speaker))].map((id, i) => ({ id, name: 'Speaker ' + (i + 1) }));
+  let t = 0.5;
+  return JSON.stringify({
+    language: 'en-us',
+    speakers,
+    segments: segments.map((g) => {
+      const words = [];
+      const start = t;
+      g.text.split(' ').forEach((w) => {
+        const m = /^(.*?)([.,!?]?)$/.exec(w);
+        words.push({ confidence: 0.98, duration: 0.25, eos: false, start: +t.toFixed(3), tags: g.fillers && g.fillers.includes(m[1]) ? ['filler'] : [], text: m[1], type: 'word' });
+        if (m[2]) words.push({ confidence: 1, duration: 0, eos: m[2] !== ',', start: +(t + 0.25).toFixed(3), tags: [], text: m[2], type: 'punctuation' });
+        t += 0.3;
+      });
+      t += 0.6;
+      return { duration: +(t - start).toFixed(3), language: 'en-us', speaker: g.speaker, start: +start.toFixed(3), words };
+    }),
+  });
+}
+
+test('Premiere JSON (official spec): words, punctuation tokens, eos and speakers', () => {
+  const json = premiereJSON([
+    { speaker: '631fbbc0-9c02-47c4-bb8c-732c020fa24f', text: 'So how did you start making videos' },
+    { speaker: '7a2c1f00-1111-4b2b-9c3d-000000000002', text: 'Honestly I just bought a cheap camera.' },
+  ]);
+  const { words } = E.parseTimedTranscript(json);
+  assert.equal(words[0].text, 'So');
+  assert.equal(words[words.length - 1].text, 'camera.');
+  assert.ok(words[words.length - 1].eos);
+  // No punctuation between the speakers, but the speaker change still starts a new caption.
+  const res = E.generate({ timedText: json, options: { minWords: 2, maxWords: 12 } });
+  assert.ok(res.captions.some((c) => c.text.endsWith('making videos')), capTexts(res).join(' | '));
+  assert.ok(res.captions.some((c) => c.text.startsWith('Honestly')), capTexts(res).join(' | '));
+  const off = E.generate({ timedText: json, options: { minWords: 2, maxWords: 12, splitSpeakers: false } });
+  assert.ok(off.captions.some((c) => /videos Honestly/.test(c.text)), capTexts(off).join(' | '));
+});
+
+test('filler words can be removed', () => {
+  const json = premiereJSON([{ speaker: 'a', text: 'So um I think uh this is really good.', fillers: ['um', 'uh'] }]);
+  const keep = E.generate({ timedText: json, options: { minWords: 2, maxWords: 12 } });
+  const drop = E.generate({ timedText: json, options: { minWords: 2, maxWords: 12, removeFillers: true } });
+  assert.match(capTexts(keep).join(' '), /\bum\b/);
+  assert.equal(capTexts(drop).join(' '), 'So I think this is really good.');
+});
+
+// ---------------------------------------------------------------------------
+// Subtitle rules (Netflix style), drift, Turkish lexicon
+// ---------------------------------------------------------------------------
+test('reading speed: captions read faster than the limit are flagged', () => {
+  // 20 long words in 2 seconds is far too fast to read.
+  const fast = Array.from({ length: 20 }, (_, i) => ({ word: ' extraordinary' + i, start: i * 0.1, end: i * 0.1 + 0.09 }));
+  const res = E.generate({ timedText: JSON.stringify({ words: fast }), options: { minWords: 2, maxWords: 5, language: 'en' } });
+  assert.ok(res.captions.some((c) => c.flags.some((f) => f.startsWith('fast'))));
+  const normal = E.generate({ timedText: whisperJSON('This is a calm and normal sentence.'), options: { language: 'en', maxCps: 25 } });
+  assert.ok(normal.captions.every((c) => !c.flags.some((f) => f.startsWith('fast'))));
+});
+
+test('two-line captions prefer a shorter top line', () => {
+  const res = E.generate({ timedText: whisperJSON('We walked all the way home through the old park yesterday.'), options: { minWords: 11, maxWords: 12, maxCharsPerLine: 32, maxLines: 2 } });
+  const [l1, l2] = res.captions[0].lines;
+  assert.ok(l1.length <= l2.length + 4, `${l1} / ${l2}`);
+});
+
+test('drift between transcript and audio (24 vs 23.976 fps) is corrected', () => {
+  const base = sampleText;
+  const truth = S.makeTruth(Array(5).fill(base).join(' '), 77, 'en');
+  const a = S.renderSpeech(truth, 78);
+  const env = E.analyzeAudio(a.samples, a.sampleRate);
+  const drifted = truth.map((w) => ({ text: w.text, start: w.start * 1.001, end: w.end * 1.001 }));
+  const p = E.prepareWords(JSON.stringify({ words: drifted }), '', env, 'en');
+  assert.ok(p.audioDrift && Math.abs(p.audioDrift.slope + 0.001) < 0.0003, JSON.stringify(p.audioDrift));
+  const res = E.buildCaptions(p.words, { minWords: 3, maxWords: 6 });
+  assert.ok(S.summary(S.captionErrors(res.captions, truth)).avg < 10);
+  // no false drift
+  const p2 = E.prepareWords(JSON.stringify({ words: truth }), '', env, 'en');
+  assert.equal(p2.audioDrift, null);
+});
+
+test('Turkish: hand-marked phrases (with the Zemberek word lists)', () => {
+  const gold = require('./phrasing-gold-tr.js');
+  const norm = (x) => x.replace(/İ/g, 'i').toLowerCase().replace(/[^\p{L}\p{N} ]/gu, '');
+  let splits = 0;
+  for (const [mn, mx] of [[3, 6], [2, 8]]) {
+    for (const [sent, phrases] of gold) {
+      const res = E.generate({ timedText: whisperJSON(sent), options: { minWords: mn, maxWords: mx, language: 'tr' } });
+      const units = res.captions.flatMap((c) => c.lines).map(norm);
+      phrases.forEach((ph) => { if (ph.split(' ').length <= mx && !units.some((u) => (' ' + u + ' ').includes(' ' + norm(ph) + ' '))) splits++; });
+    }
+  }
+  assert.ok(splits <= 1, splits + ' Turkish phrases split');
+  const tags = (s) => P.tagTR(s.split(' ').map((t) => ({ text: t })));
+  assert.deepEqual(tags('Elmalı turta yedik.'), ['ADJ', 'N', 'V']);
+});
