@@ -91,11 +91,17 @@ node tools/benchmark-sync.js               # measure sync accuracy
 
 Opening `index.html` in a browser also works for previewing and downloading the SRT.
 
+## Credits
+
+English part-of-speech tagging uses [compromise](https://github.com/spencermountain/compromise) by Spencer Kelly (MIT License, bundled in `js/vendor/`). On Premiere versions older than 2022 the panel falls back to its own built-in tagger.
+
 ## Files
 
 | Path | What |
 |---|---|
 | `js/caption-engine.js` | parsing, alignment, splitting, SRT (pure JS, tested) |
+| `js/phrasing.js` | subtitle grammar: part-of-speech tagging and which words belong together |
+| `js/vendor/compromise.js` | English grammar library (MIT) |
 | `js/main.js`, `index.html`, `css/` | panel UI |
 | `jsx/host.jsx` | ExtendScript: writes/imports the SRT, creates the caption track |
 | `CSXS/manifest.xml` | extension manifest (Premiere Pro 2020+) |

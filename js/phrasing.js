@@ -161,15 +161,64 @@
     return 'N';
   }
 
-  var NOMINAL = set('N PROPN NUM GEN');
+  /** The bundled English grammar library (js/vendor/compromise.js), if available. */
+  function getNlp() {
+    if (typeof nlp === 'function') return nlp;                      // panel: global from the script tag
+    if (typeof module === 'object' && typeof require === 'function') {
+      try { return require('./vendor/compromise.js'); } catch (e) { /* not bundled */ }
+    }
+    return null;
+  }
+
+  /** Tags from the library for every word (union of the tags of its terms). */
+  function libraryTags(words, lib) {
+    var text = '', starts = [];
+    words.forEach(function (w, i) { starts.push(text.length); text += w.text + (i < words.length - 1 ? ' ' : ''); });
+    var out = words.map(function () { return []; });
+    lib(text).json({ offset: true }).forEach(function (sent) {
+      sent.terms.forEach(function (t) {
+        var off = t.offset ? t.offset.start : -1;
+        if (off < 0) return;
+        var lo = 0, hi = starts.length - 1;
+        while (lo < hi) { var mid = (lo + hi + 1) >> 1; if (starts[mid] <= off) lo = mid; else hi = mid - 1; }
+        Array.prototype.push.apply(out[lo], t.tags);
+      });
+    });
+    return out;
+  }
+
+  var CLOSED = ['NUM', 'PRONAUX', 'NEGAUX', 'TO', 'NEG', 'POSS', 'DET', 'QUANT', 'AUX', 'COP', 'PRON', 'CONJ', 'REL', 'PREP', 'PREPCONJ', 'INTJ', 'GEN'];
+
+  /** Content-word tag from the library's tags (function words keep our own lists). */
+  function fromLibrary(lex, lt, raw, w, isStart) {
+    if (CLOSED.indexOf(lex) >= 0 || !lt.length) return lex;
+    var has = function (t) { return lt.indexOf(t) >= 0; };
+    if (has('Particle')) return 'PRT';
+    if (has('Expression')) return 'INTJ';
+    if (has('Ordinal')) return 'ADJ';
+    if (has('Value') || has('Cardinal')) return 'NUM';
+    if (has('ProperNoun') && /^\p{Lu}/u.test(raw)) return 'PROPN';
+    if (has('Adjective')) return 'ADJ';
+    if (has('Adverb')) return 'ADV';
+    if (has('Gerund')) return 'VING';
+    if (has('Verb')) return (has('PastTense') || has('Participle')) ? 'VED' : 'V';
+    if (has('Noun')) return 'N';
+    return lex;
+  }
+
+  var NOMINAL = set('N PROPN NUM GEN NMOD');
   var ADJLIKE = set('ADJ VING VED');
 
-  function tagEN(words) {
+  function tagEN(words, opts) {
     var n = words.length, tags = new Array(n), i;
     var low = words.map(function (w) { return clean(w.text); });
+    var lib = opts && opts.engine === 'own' ? null : getNlp();
+    var lt = null;
+    if (lib) { try { lt = libraryTags(words, lib); } catch (e) { lt = null; } }
     for (i = 0; i < n; i++) {
       var sentStart = i === 0 || /[.!?…]["'”’)]*$/.test(words[i - 1].text);
       tags[i] = lexEN(words[i].text, low[i], sentStart);
+      if (lt) tags[i] = fromLibrary(tags[i], lt[i], words[i].text, low[i], sentStart);
       if (sentStart && tags[i] === 'N' && /^\p{Lu}/u.test(words[i].text) && i + 1 < n && /^\p{Lu}/u.test(words[i + 1].text)) tags[i] = 'PROPN';
     }
     // "every single one", "the red one", "this one": "one" is the head noun, not a number.
@@ -188,7 +237,7 @@
       }
       // After an article/possessive/adjective, a verb-looking word is a noun or adjective ("the cut", "a running joke").
       if ((t === 'V' || t === 'VING' || t === 'VED') && prev && !prevPunct && (prev === 'DET' || prev === 'POSS' || prev === 'ADJ' || prev === 'QUANT' || prev === 'NUM' || prev === 'GEN')) {
-        tags[i] = (next && !trailingPunct(words[i].text) && (NOMINAL[next] || next === 'V')) ? 'ADJ' : 'N';
+        tags[i] = (next && !trailingPunct(words[i].text) && NOMINAL[next]) ? 'ADJ' : 'N';
       }
       // A noun right after "to"/a helper/a subject pronoun is usually a verb ("I need to cut", "we split").
       if (t === 'N' && prev && !prevPunct && (prev === 'PART' || prev === 'AUX' || prev === 'NEGAUX' || prev === 'NEG' || (prev === 'PRON' && EN.SUBJ[low[i - 1]]) || prev === 'PRONAUX') && verbStem(low[i])) tags[i] = 'V';
@@ -203,7 +252,9 @@
       if ((t === 'VED' || t === 'VING') && prev === 'ADV' && EN.INTENS[low[i - 1]] && !prevPunct) tags[i] = 'ADJ';
       // A particle after a verb ("pick up", "find out").
       if ((t === 'PREP' || t === 'ADV') && EN.PARTICLE[low[i]] && prev && (prev === 'V' || prev === 'VED' || prev === 'VING') && !prevPunct) {
-        if (!next || trailingPunct(words[i].text) || next === 'PREP' || next === 'CONJ' || next === 'DET' || next === 'POSS' || next === 'PRON' ||
+        var trueParticle = /^(up|out|down|off|away|back|apart|aside|together)$/.test(low[i]);
+        if (!next || trailingPunct(words[i].text) || next === 'PREP' || next === 'CONJ' ||
+            (trueParticle && (next === 'DET' || next === 'POSS' || next === 'PRON')) ||
             ((next === 'ADJ' || next === 'ADV' || next === 'NUM' || next === 'N') && /^(back|away|out|home|down|off|over|around)$/.test(low[i]))) tags[i] = 'PRT';
       }
     }
@@ -217,6 +268,23 @@
         /(er|est|y)$/.test(low[i]) && low[i].length > 3) tags[i] = 'ADJ';
       else if ((t2 === 'VED' || t2 === 'VING') && beforeNoun && (pv === 'DET' || pv === 'POSS' || pv === 'ADJ' || pv === 'ADV')) tags[i] = 'ADJ';
       else if (low[i] === 'little' && NOMINAL[nx] && (pv === 'ADJ' || pv === 'DET' || pv === 'POSS')) tags[i] = 'ADJ';
+      else if (t2 === 'N' && nx === 'ADJ' && (pv === 'DET' || pv === 'POSS' || pv === 'GEN' || pv === 'ADJ' || pv === 'NUM')) tags[i] = 'ADJ';
+    }
+    // After a plural determiner the phrase ends in a plural noun: "those tiny warning signs".
+    for (i = 1; i < n; i++) {
+      if (!(tags[i] === 'V' && /s$/.test(low[i])) || trailingPunct(words[i - 1].text)) continue;
+      for (var j = i - 1; j >= Math.max(0, i - 4); j--) {
+        if (/^(those|these|many|several|both|few|various|all|some|such|my|your|his|her|our|their)$/.test(low[j]) && (tags[j] === 'DET' || tags[j] === 'QUANT' || tags[j] === 'POSS')) {
+          if (j < i - 1 && tags[i - 1] !== 'V') tags[i] = 'N';
+          break;
+        }
+        if (!/^(ADJ|N|NMOD|ADV)$/.test(tags[j]) || trailingPunct(words[j].text)) break;
+      }
+    }
+    // Noun modifiers inside a noun phrase, left to right: "the vintage silk dress", "a cheap coffee shop".
+    for (i = 1; i < n - 1; i++) {
+      if (trailingPunct(words[i].text) || trailingPunct(words[i - 1].text)) continue;
+      if (tags[i] === 'N' && NOMINAL[tags[i + 1]] && tags[i + 1] !== 'NUM' && /^(DET|POSS|GEN|ADJ|NUM|NMOD)$/.test(tags[i - 1])) tags[i] = 'NMOD';
     }
     return tags;
   }
@@ -237,11 +305,14 @@
       case 'ADV':
         if (EN.INTENS[lw] && (ADJLIKE[R] || R === 'ADV' || R === 'QUANT')) return 1;   // "really | talented"
         return (R === 'V' || R === 'VED' || R === 'VING') ? 0.5 : (ADJLIKE[R] ? 0.8 : 0);
-      case 'PREP': return 1;                                   // "in | the middle"
+      // "in | the middle": strong, but a little weaker than splits inside the noun phrase itself,
+      // so when something has to give, "to | the annual charity gala" beats "to the annual | charity gala".
+      case 'PREP': return (R === 'DET' || R === 'POSS' || R === 'QUANT' || R === 'NUM') ? 0.85 : 1;
       case 'PART': case 'TO': return 1;                        // "to | read"
       case 'AUX': case 'NEGAUX':
         return (R === 'V' || R === 'VED' || R === 'VING' || R === 'AUX' || R === 'COP' || R === 'NEG' || R === 'ADV' || R === 'PRON') ? 1 : 0.6;
       case 'COP': case 'PRONAUX':
+        if (R === 'V' || R === 'VED' || R === 'VING') return 1;   // "are | going", "has been | working", "was | built"
         return (R === 'V' || R === 'VED' || R === 'VING' || R === 'NEG' || R === 'ADV' || ADJLIKE[R] || R === 'DET' || R === 'PART') ? 0.7 : 0.4;
       case 'NEG':
         return (R === 'V' || R === 'VED' || R === 'VING' || R === 'AUX' || R === 'COP' || ADJLIKE[R] || R === 'ADV' || R === 'DET') ? 1 : 0.6;
@@ -250,8 +321,10 @@
         return EN.SUBJ[lw] && (R === 'V' || R === 'VED' || R === 'AUX' || R === 'COP' || R === 'NEG' || R === 'NEGAUX' || R === 'ADV') ? 0.7 : (R === 'PRT' ? 0.8 : 0);
       case 'V': case 'VED': case 'VING':
         if (R === 'PRT') return 0.9;                           // "pick | up"
+        if (R === 'PART' && /^(going|gonna|got|have|has|had|used|supposed|able|ought|want|wants|wanted|need|needs|needed|try|trying|tried)$/.test(lw)) return 1;   // "going | to talk"
         if (R === 'DET' || R === 'POSS' || R === 'PRON' || NOMINAL[R] || R === 'PART' || ADJLIKE[R] || R === 'NUM') return 0.4;
         return 0;
+      case 'NMOD': return 1;                                   // "coffee | shop" inside a noun phrase
       case 'N': case 'PROPN':
         if (R === 'N' || R === 'PROPN') return L === 'PROPN' && R === 'PROPN' ? 1 : 0.6;   // compound nouns, names
         if (R === 'PRT') return 0.8;
@@ -351,10 +424,14 @@
    * Cohesion for every boundary: result[b] is how strongly words[b-1] and
    * words[b] belong together (1 = keep together, negative = good break).
    */
-  function analyze(words, lang) {
+  var cache = { key: null, value: null };
+
+  function analyze(words, lang, opts) {
     var n = words.length, coh = new Float64Array(n + 1);
     if (lang !== 'en' && lang !== 'tr') return { tags: null, cohesion: coh };
-    var tags = lang === 'en' ? tagEN(words) : tagTR(words);
+    var key = lang + '|' + (opts && opts.engine || '') + '|' + words.map(function (w) { return w.text; }).join(' ');
+    if (cache.key === key) return cache.value;
+    var tags = lang === 'en' ? tagEN(words, opts) : tagTR(words);
     var low = words.map(function (w) { return clean(w.text); });
     for (var b = 1; b < n; b++) {
       var L = tags[b - 1], R = tags[b];
@@ -363,9 +440,25 @@
       var bonus = lang === 'en' ? breakBonusEN(L, R, low[b - 1], low[b]) : breakBonusTR(L, R);
       coh[b] = c > 0 ? c : bonus;
       if (c > 0 && bonus < 0 && c < 0.5) coh[b] = bonus;     // weak link but a clear phrase start
+
     }
-    return { tags: tags, cohesion: coh };
+    // Coordinated adjectives belong together: "a melancholic | but | hopeful ending".
+    if (lang === 'en') {
+      for (b = 1; b < n - 1; b++) {
+        // left side: an adjective, or a word the tagger called a noun right after "a/the/my…" ("a melancholic but…")
+        var leftOk = ADJLIKE[tags[b - 1]] || (tags[b - 1] === 'N' && b >= 2 && /^(DET|POSS|GEN|ADJ|ADV)$/.test(tags[b - 2]));
+        if (!leftOk || !/^(and|or|but|yet)$/.test(low[b]) || trailingPunct(words[b - 1].text)) continue;
+        var k = b + 1;
+        while (k < n && (tags[k] === 'ADJ' || tags[k] === 'ADV' || tags[k] === 'VED') && !trailingPunct(words[k - 1].text)) k++;
+        if (k > b + 1 && k < n && NOMINAL[tags[k]]) for (var q = b; q <= k; q++) coh[q] = Math.max(coh[q], 1);
+      }
+    }
+    var result = { tags: tags, cohesion: coh };
+    cache.key = key; cache.value = result;
+    return result;
   }
 
-  return { analyze: analyze, tagEN: tagEN, tagTR: tagTR };
+  function hasLibrary() { return !!getNlp(); }
+
+  return { analyze: analyze, tagEN: tagEN, tagTR: tagTR, hasLibrary: hasLibrary };
 }));

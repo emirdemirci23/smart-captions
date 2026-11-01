@@ -833,7 +833,7 @@
         // 1 → never split ("a beautiful | house"), negative → natural break ("…house | and then").
         var coh = phr.cohesion[b];
         // Strong pairs cost more than one missing word, so meaning wins over the minimum.
-        c += coh >= 0.9 ? SYNTAX_STRONG : coh > 0 ? SYNTAX_KEEP * coh : SYNTAX_BREAK * coh;
+        c += coh >= 0.9 ? SYNTAX_STRONG : coh >= 0.8 ? SYNTAX_STRONG * 0.75 : coh > 0 ? SYNTAX_KEEP * coh : SYNTAX_BREAK * coh;
       } else {
         var weakCost = o.avoidWeakEdges ? 30 : 5;
         if (!punct && noEnd[normed[b - 1]]) c += weakCost;     // "... the | house"

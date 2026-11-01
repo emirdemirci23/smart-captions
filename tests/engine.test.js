@@ -510,3 +510,26 @@ test('Turkish: noun phrases and postpositions stay together', () => {
   assert.deepEqual(splitPairs(res, 'tr'), [], capTexts(res).join(' | '));
   assert.ok(capTexts(res).some((c) => c.includes('çok güzel bir ev')), capTexts(res).join(' | '));
 });
+
+test('hand-marked phrases stay whole (library + rules, and own tagger as fallback)', () => {
+  const gold = require('./phrasing-gold.js');
+  const norm = (x) => x.toLowerCase().replace(/[^a-z0-9' ]/g, '');
+  const count = (engine) => {
+    const orig = P.analyze;
+    if (engine === 'own') P.analyze = (w, l) => orig(w, l, { engine: 'own' });
+    let splits = 0;
+    try {
+      for (const [mn, mx] of [[3, 6], [2, 8]]) {
+        for (const [sent, phrases] of gold) {
+          const res = E.generate({ timedText: whisperJSON(sent), options: { minWords: mn, maxWords: mx, language: 'en' } });
+          const units = res.captions.flatMap((c) => c.lines).map(norm);
+          phrases.forEach((ph) => { if (!units.some((u) => (' ' + u + ' ').includes(' ' + norm(ph) + ' '))) splits++; });
+        }
+      }
+    } finally { P.analyze = orig; }
+    return splits;
+  };
+  assert.ok(P.hasLibrary(), 'bundled grammar library loads in Node');
+  assert.equal(count('library'), 0, 'no hand-marked phrase split at min 3/max 6 and min 2/max 8');
+  assert.ok(count('own') <= 6, 'fallback tagger still keeps most phrases');
+});

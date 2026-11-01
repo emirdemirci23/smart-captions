@@ -1,7 +1,7 @@
 {
-  "version": "1.7.0",
+  "version": "1.8.0",
   "date": "2026-11-01",
-  "notes": "Natural phrasing: subtitle grammar keeps adjectives with nouns, articles, verb groups; breaks at phrase boundaries",
+  "notes": "Better English grammar via the bundled compromise library (MIT); coordinated adjectives, 'going to', progressive verbs",
   "files": [
     "index.html",
     "css/style.css",
@@ -9,6 +9,8 @@
     "js/main.js",
     "js/phrasing.js",
     "js/updater.js",
+    "js/vendor/compromise.LICENSE.txt",
+    "js/vendor/compromise.js",
     "jsx/host.jsx",
     "CSXS/manifest.xml"
   ]
