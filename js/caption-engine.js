@@ -26,6 +26,15 @@
 }(typeof self !== 'undefined' ? self : this, function () {
   'use strict';
 
+  /** Phrasing rules (js/phrasing.js): a global in the panel, a module in Node. */
+  function getPhrasing() {
+    if (typeof SmartPhrasing === 'object' && SmartPhrasing) return SmartPhrasing;
+    if (typeof module === 'object' && typeof require === 'function') {
+      try { return require('./phrasing.js'); } catch (e) { /* not available */ }
+    }
+    return null;
+  }
+
   // ---------------------------------------------------------------------------
   // Defaults & language data
   // ---------------------------------------------------------------------------
@@ -41,7 +50,8 @@
     continuous: true,      // every caption lasts until the next one starts
     splitSentences: true,  // never put the end of one sentence and the start of another together
     breakAtCommas: true,   // once a caption has minWords, it ends at the next comma (, ; : —)
-    avoidWeakEdges: false, // avoid ending on "of", "the"... / starting with "için", "gibi"...
+    avoidWeakEdges: false, // (when phrasing is off) avoid ending on "of", "the"... / starting with "için"...
+    phrasing: true,        // subtitle grammar: keep adjective+noun, article+noun, verb groups... together
     closeGapsUnder: 0.5,   // (continuous off) gaps shorter than this are closed
     minGap: 0.067,         // seconds between consecutive captions (~2 frames)
     pauseSplit: 0.8,       // a pause longer than this inside a caption is penalised
@@ -739,6 +749,10 @@
     var noEnd = toSet(lang.noEnd), noStart = toSet(lang.noStart);
     var b, i;
     var hasCues = words.some(function (w) { return w.cueEnd; });
+    // Subtitle grammar: how strongly each pair of neighbouring words belongs together.
+    var P = o.phrasing ? getPhrasing() : null;
+    var phr = P ? P.analyze(words, o.language) : null;
+    var useGrammar = !!(phr && phr.tags);
 
     for (b = 1; b < n; b++) {
       var pw = words[b - 1].text;
@@ -815,9 +829,16 @@
       var punct = hasTrailingPunct(prevW.text);
       // Weak words at caption edges: a strong rule when enabled, otherwise only a
       // tie-breaker (captions may end on "of" when commas, stress or limits call for it).
-      var weakCost = o.avoidWeakEdges ? 30 : 5;
-      if (!punct && noEnd[normed[b - 1]]) c += weakCost;     // "... the | house"
-      if (!punct && noStart[normed[b]]) c += weakCost;       // "ev | için"
+      if (useGrammar) {
+        // 1 → never split ("a beautiful | house"), negative → natural break ("…house | and then").
+        var coh = phr.cohesion[b];
+        // Strong pairs cost more than one missing word, so meaning wins over the minimum.
+        c += coh >= 0.9 ? SYNTAX_STRONG : coh > 0 ? SYNTAX_KEEP * coh : SYNTAX_BREAK * coh;
+      } else {
+        var weakCost = o.avoidWeakEdges ? 30 : 5;
+        if (!punct && noEnd[normed[b - 1]]) c += weakCost;     // "... the | house"
+        if (!punct && noStart[normed[b]]) c += weakCost;       // "ev | için"
+      }
       if (hasCues) c += words[b - 1].cueEnd ? -6 : 14;   // exact line times vs estimated
       // With audio, a caption that starts right after a pause has an unambiguous start.
       if (nextW.audio && prevW.audio && !words[b - 1].cueEnd) c += gap >= 0.06 ? -4 : AUDIO_NO_PAUSE;
@@ -830,7 +851,7 @@
       cost[b] = Math.max(0, c);
     }
 
-    return { forbidden: forbidden, forced: forced, cost: cost, sentEnd: sentEnd, edge: edge, reason: reason };
+    return { forbidden: forbidden, forced: forced, cost: cost, sentEnd: sentEnd, edge: edge, reason: reason, tags: phr && phr.tags };
   }
 
   // ---------------------------------------------------------------------------
@@ -948,6 +969,9 @@
   // ---------------------------------------------------------------------------
 
   var AUDIO_NO_PAUSE = 4;
+  var SYNTAX_STRONG = 80;   // cost of splitting a strong pair (adjective+noun, the+noun, to+verb…)
+  var SYNTAX_KEEP = 35;     // cost of splitting words that belong together (× cohesion)
+  var SYNTAX_BREAK = 20;    // bonus for breaking at a natural phrase boundary (× -cohesion)
   var OFFSET_MIN_WEIGHT = 15;   // extra cost for starting a caption without a pause before it
   var ENV_HOP = 0.0025;   // envelope resolution: 2.5 ms
   var ENV_WIN = 4;        // RMS window = 4 hops = 10 ms
@@ -1395,6 +1419,7 @@
     o.splitSentences = !!o.splitSentences;
     o.breakAtCommas = !!o.breakAtCommas;
     o.avoidWeakEdges = !!o.avoidWeakEdges;
+    o.phrasing = !!o.phrasing;
     if (o.language !== 'auto' && !LANGS[o.language]) o.language = 'other';
     if (!Array.isArray(o.phrases)) o.phrases = o.language === 'auto' ? null : LANGS[o.language].phrases.slice();
     return o;

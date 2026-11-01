@@ -1,12 +1,13 @@
 {
-  "version": "1.6.0",
+  "version": "1.7.0",
   "date": "2026-11-01",
-  "notes": "New dark music-app style interface; click a caption to jump the playhead to it",
+  "notes": "Natural phrasing: subtitle grammar keeps adjectives with nouns, articles, verb groups; breaks at phrase boundaries",
   "files": [
     "index.html",
     "css/style.css",
     "js/caption-engine.js",
     "js/main.js",
+    "js/phrasing.js",
     "js/updater.js",
     "jsx/host.jsx",
     "CSXS/manifest.xml"

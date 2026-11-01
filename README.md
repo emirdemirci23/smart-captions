@@ -5,7 +5,7 @@ A Premiere Pro panel that turns your transcript into **synchronized captions**. 
 - keeps every caption between a **minimum and maximum number of words**
 - **never splits phrases that belong together**: your own list (e.g. "thank you so much", "as well as"), names ("New York City"), numbers with units ("10 minutes"), titles ("Dr. Smith")
 - **ends a caption at a comma** (or ; : —) once it has the minimum number of words, instead of spilling into the next phrase
-- captions may end on words like "of"; optionally avoid weak edges (ending on "the / and / of", starting with "için / gibi / mı") – English and Turkish rules built in
+- **natural phrasing** (subtitle grammar, English and Turkish): a built-in part-of-speech tagger keeps adjectives with their nouns ("strong black coffee"), articles and possessives with their words, prepositions with their objects, verbs with their helpers ("have been working", "to read") and phrasal verbs together ("pick up"), and breaks before "and / but / because / which", before prepositional phrases and between clauses
 - **detects the language** (English / Turkish) from the transcript automatically, so the right grammar rules are always used
 - with audio loaded, **starts new captions on stressed syllables** (words spoken louder than those around them) and avoids starting them on unstressed words; grammar rules still win
 - prefers breaking at commas and pauses, and **never puts two sentences in one caption**

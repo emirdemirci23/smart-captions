@@ -416,7 +416,7 @@ test('captions prefer to start on stressed (louder) words', () => {
     const w = truth[target];
     const i0 = Math.floor(w.start * a.sampleRate), i1 = Math.floor(Math.min(w.end, w.start + 0.3) * a.sampleRate);
     for (let i = i0; i < i1; i++) a.samples[i] *= 3.5;
-    const res = E.generate({ timedText: JSON.stringify({ words: truth }), audio: E.analyzeAudio(a.samples, a.sampleRate), options: { minWords: 3, maxWords: 6 } });
+    const res = E.generate({ timedText: JSON.stringify({ words: truth }), audio: E.analyzeAudio(a.samples, a.sampleRate), options: { minWords: 3, maxWords: 6, phrasing: false } });
     if (res.captions.some((c) => c.text.startsWith(w.text + ' '))) hits++;
   }
   assert.equal(hits, targets.length, `captions started on the stressed word in ${hits} of ${targets.length} cases`);
@@ -427,9 +427,9 @@ test('captions prefer to start on stressed (louder) words', () => {
   for (let i = Math.floor(w.start * a.sampleRate); i < Math.floor((w.start + 0.3) * a.sampleRate); i++) a.samples[i] *= 3.5;
   const env = E.analyzeAudio(a.samples, a.sampleRate);
   const json = JSON.stringify({ words: truth });
-  const relaxed = E.generate({ timedText: json, audio: env, options: { minWords: 3, maxWords: 6 } });
+  const relaxed = E.generate({ timedText: json, audio: env, options: { minWords: 3, maxWords: 6, phrasing: false } });
   assert.ok(relaxed.captions.some((c) => c.text.startsWith('many ')), capTexts(relaxed).join(' | '));
-  const strict = E.generate({ timedText: json, audio: env, options: { minWords: 3, maxWords: 6, avoidWeakEdges: true } });
+  const strict = E.generate({ timedText: json, audio: env, options: { minWords: 3, maxWords: 6, avoidWeakEdges: true, phrasing: false } });
   strict.captions.forEach((c) => assert.ok(!/\b(at|to|and)$/.test(c.text), c.text));
 });
 
@@ -453,4 +453,60 @@ test('captions may end on "of" by default', () => {
   const relaxed = E.generate({ timedText: whisperJSON(text), options: { minWords: 2, maxWords: 4 } });
   assert.equal(relaxed.options.avoidWeakEdges, false);
   strict.captions.slice(0, -1).forEach((c) => assert.ok(!/\b(of|the)$/.test(c.text), c.text));
+});
+
+// ---------------------------------------------------------------------------
+// Phrasing (subtitle grammar)
+// ---------------------------------------------------------------------------
+const P = require('../js/phrasing.js');
+
+function splitPairs(res, lang) {
+  const flat = res.captions.flatMap((c) => c.words.map((w) => ({ text: w.text })));
+  const an = P.analyze(flat, lang);
+  const bad = [];
+  let idx = 0;
+  res.captions.forEach((c, ci) => {
+    const cuts = [];
+    if (ci < res.captions.length - 1) cuts.push(idx + c.wordCount);
+    if (c.lines.length === 2) cuts.push(idx + c.lines[0].split(' ').length);
+    cuts.forEach((b) => { if (an.cohesion[b] >= 0.9) bad.push(flat[b - 1].text + ' | ' + flat[b].text); });
+    idx += c.wordCount;
+  });
+  return bad;
+}
+
+test('tagger: adjectives, articles, verb groups', () => {
+  const tags = (s) => P.tagEN(s.split(' ').map((t) => ({ text: t })));
+  assert.deepEqual(tags('a beautiful old wooden house'), ['DET', 'ADJ', 'ADJ', 'ADJ', 'N']);
+  assert.deepEqual(tags('She is a really talented young designer'), ['PRON', 'COP', 'DET', 'ADV', 'ADJ', 'ADJ', 'N']);
+  assert.deepEqual(tags('they have been working'), ['PRON', 'AUX', 'COP', 'V']);
+  assert.deepEqual(tags('you need to pick up the box'), ['PRON', 'V', 'PART', 'V', 'PRT', 'DET', 'N']);
+});
+
+test('adjectives stay with their nouns (and other strong pairs are never split)', () => {
+  const text = 'Last summer we rented a small wooden cabin near a quiet mountain lake. The old owner was a really friendly man who told us amazing stories about the long cold winters. Every single morning we drank strong black coffee on the tiny front porch and watched the bright orange sun come up over the dark green forest.';
+  for (const [mn, mx] of [[3, 6], [2, 8], [2, 5]]) {
+    const res = E.generate({ timedText: whisperJSON(text), options: { minWords: mn, maxWords: mx } });
+    assert.deepEqual(splitPairs(res, 'en'), [], `min ${mn} max ${mx}: ${capTexts(res).join(' | ')}`);
+    assert.ok(res.captions.every((c) => c.wordCount <= mx));
+    const t = capTexts(res).join(' | ');
+    for (const np of ['strong black coffee', 'tiny front porch', 'dark green forest', 'really friendly man']) assert.ok(t.includes(np), `"${np}" split: ${t}`);
+  }
+  // Without phrasing the old behaviour split some of them.
+  const off = E.generate({ timedText: whisperJSON(text), options: { minWords: 3, maxWords: 6, phrasing: false } });
+  assert.ok(splitPairs(off, 'en').length > 0);
+});
+
+test('captions break at natural phrase boundaries', () => {
+  const res = E.generate({ timedText: whisperJSON('I walked into the old house and then I opened the door to the garden very slowly.'), options: { minWords: 3, maxWords: 5 } });
+  const t = capTexts(res);
+  assert.ok(t.includes('into the old house'), t.join(' | '));
+  assert.ok(t.some((c) => c.startsWith('to the garden')), t.join(' | '));
+});
+
+test('Turkish: noun phrases and postpositions stay together', () => {
+  const text = 'Geçen yaz küçük bir köyde çok güzel bir ev kiraladık. Evin sahibi yaşlı ve çok nazik bir adamdı. Her sabah eski bahçede sıcak çay içtik ve uzun sohbetler ettik.';
+  const res = E.generate({ timedText: whisperJSON(text), options: { minWords: 2, maxWords: 5, language: 'tr' } });
+  assert.deepEqual(splitPairs(res, 'tr'), [], capTexts(res).join(' | '));
+  assert.ok(capTexts(res).some((c) => c.includes('çok güzel bir ev')), capTexts(res).join(' | '));
 });
