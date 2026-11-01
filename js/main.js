@@ -61,6 +61,8 @@
       Object.keys(saved).forEach(function (k) { if (k in s) s[k] = saved[k]; });
       // v1.4: language is detected automatically; switch older saved settings to Auto once.
       if (!saved.autoLanguage) s.language = 'auto';
+      // v1.11: the pause threshold default went from 0.8 s to 1.5 s; move the old default along.
+      if (!saved.pauseV2 && parseFloat(saved.pauseSplit) === 0.8) s.pauseSplit = E.DEFAULTS.pauseSplit;
     } catch (e) { /* ignore */ }
     return s;
   }
@@ -88,6 +90,7 @@
     try {
       var data = readSettings();
       data.autoLanguage = true;
+      data.pauseV2 = true;
       localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
     } catch (e) { /* ignore */ }
   }

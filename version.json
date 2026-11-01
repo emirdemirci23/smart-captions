@@ -1,7 +1,7 @@
 {
-  "version": "1.10.0",
+  "version": "1.11.0",
   "date": "2026-11-01",
-  "notes": "Local transcript offset correction (fixes Premiere times that are early in part of a file); real-recording validation",
+  "notes": "Hesitations inside a sentence no longer fragment captions; intro commas stay with what follows; clause breaks preferred",
   "files": [
     "index.html",
     "css/style.css",

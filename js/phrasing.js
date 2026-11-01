@@ -345,11 +345,13 @@
   /** Good places to break (start of a new phrase / clause). */
   function breakBonusEN(L, R, lw, rw) {
     if (R === 'CONJ' || R === 'REL') return -0.5;             // break before "and", "because", "which"
-    if (R === 'PREP' && (NOMINAL[L] || L === 'V' || L === 'VED' || L === 'VING' || L === 'ADJ' || L === 'ADV' || L === 'PRON' || L === 'PRT')) return -0.3;
-    if (R === 'PREPCONJ') return -0.3;
+    // A new clause (new subject) is a stronger break than the start of a prepositional phrase:
+    // "I think | I wasn't ready for that" beats "I think I wasn't ready | for that".
     if ((R === 'PRON' && EN.SUBJ[rw]) || R === 'PRONAUX') {
-      if (NOMINAL[L] || L === 'V' || L === 'VED' || L === 'ADJ' || L === 'ADV' || L === 'PRT' || L === 'PRON') return -0.3;  // new clause
+      if (NOMINAL[L] || L === 'V' || L === 'VED' || L === 'ADJ' || L === 'ADV' || L === 'PRT' || L === 'PRON') return -0.5;  // new clause
     }
+    if (R === 'PREP' && (NOMINAL[L] || L === 'V' || L === 'VED' || L === 'VING' || L === 'ADJ' || L === 'ADV' || L === 'PRON' || L === 'PRT')) return -0.2;
+    if (R === 'PREPCONJ') return -0.3;
     if (R === 'PART' && (NOMINAL[L] || L === 'ADJ')) return -0.15;
     return 0;
   }

@@ -88,10 +88,9 @@ test('every caption respects min/max words when possible', () => {
     'It is the question of how to make captions that are easy to read and that never feel rushed or broken. ' +
     'The answer is simpler than you might think, and it starts with the transcript.';
   const res = E.generate({ timedText: whisperJSON(text), options: { minWords: 3, maxWords: 6 } });
-  res.captions.forEach((c) => {
-    assert.ok(c.wordCount <= 6, `too long: "${c.text}"`);
-    assert.ok(c.wordCount >= 3, `too short: "${c.text}"`);
-  });
+  res.captions.forEach((c) => assert.ok(c.wordCount <= 6, `too long: "${c.text}"`));
+  // Meaning wins over the minimum: at most one short caption (e.g. an intro like "So today").
+  assert.ok(res.captions.filter((c) => c.wordCount < 3).length <= 1, capTexts(res).join(' | '));
   // All words preserved, in order.
   assert.equal(capTexts(res).join(' '), text);
 });
@@ -644,4 +643,17 @@ test('transcript that is early in one part and accurate in another (local offset
   const res = E.buildCaptions(p.words, { minWords: 3, maxWords: 6 });
   const s = S.summary(S.captionErrors(res.captions, truth));
   assert.ok(s.median < 6 && s.avg < 25, `median ${s.median.toFixed(1)} avg ${s.avg.toFixed(1)}`);
+});
+
+test('hesitations inside a sentence do not fragment it (interview speech)', () => {
+  // "Sometimes, … maybe, … I think … I wasn't ready for that before." with ~1 s thinking pauses
+  const spec = [['Sometimes,', 0.55, 0.9], ['maybe,', 0.35, 0.7], ['I', 0.12, 0.05], ['think', 0.25, 0.85], ['I', 0.1, 0.05], ["wasn't", 0.25, 0.05],
+    ['ready', 0.3, 0.35], ['for', 0.15, 0.05], ['that', 0.18, 0.05], ['before.', 0.45, 0.6]];
+  let t = 0.5;
+  const words = spec.map(([w, d, g]) => { const o = { text: w, start: +t.toFixed(3), duration: d }; t += d + g; return o; });
+  const json = JSON.stringify({ language: 'en-us', segments: [{ start: 0.5, duration: t, speaker: 'a', words }], speakers: [{ id: 'a', name: 'x' }] });
+  for (const mn of [1, 2, 3]) {
+    const res = E.generate({ timedText: json, options: { minWords: mn, maxWords: 8 } });
+    assert.deepEqual(capTexts(res), ['Sometimes, maybe, I think', "I wasn't ready for that before."], 'min ' + mn);
+  }
 });

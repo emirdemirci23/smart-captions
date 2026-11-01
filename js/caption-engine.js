@@ -57,7 +57,7 @@
     removeFillers: false,  // drop filler words ("um", "uh") tagged by Premiere or common English fillers
     closeGapsUnder: 0.5,   // (continuous off) gaps shorter than this are closed
     minGap: 0.067,         // seconds between consecutive captions (~2 frames)
-    pauseSplit: 0.8,       // a pause longer than this inside a caption is penalised
+    pauseSplit: 1.5,       // a pause longer than this ends a caption (hesitations in conversation are shorter)
     offset: 0,             // seconds added to every caption
     frameDuration: 0,      // if > 0, times are snapped to frames
     protectNames: true,    // keep "New York", "Emma Stone" together
@@ -893,6 +893,13 @@
       if (run > longest) longest = run;
     }
     var maxSpan = o.maxWords + longest;
+    // Commas after a 1–2 word intro ("Sometimes,", "Well, maybe,") are not clause boundaries.
+    var introComma = new Uint8Array(n);
+    for (var w0 = 0, since = 0; w0 < n; w0++) {
+      since++;
+      if (CLAUSE_RE.test(words[w0].text)) { introComma[w0] = since <= 2 ? 1 : 0; since = 0; }
+      else if (B.sentEnd[w0 + 1] || (w0 + 1 < n && B.forced[w0 + 1])) since = 0;
+    }
     var maxChars = o.maxCharsPerLine * o.maxLines;
     var maxCps = readingSpeedLimit(o);
     var target = (o.minWords + o.maxWords) / 2;
@@ -908,7 +915,7 @@
         if (i < j - 1) {
           if (B.forced[i + 1]) break;               // can't span a forced break
           if (B.sentEnd[i + 1]) sentInside++;
-          else if (CLAUSE_RE.test(words[i].text)) {
+          else if (CLAUSE_RE.test(words[i].text) && !introComma[i]) {
             clauseInside++;
             if (lastComma < 0) lastComma = i + 1;   // comma boundary closest to the caption end
           }
@@ -931,8 +938,11 @@
         if (cps > maxCps) c += 6 * (cps - maxCps);
         c += 25 * sentInside + 6 * clauseInside;
         // The caption already had enough words when it reached a comma: it should have ended there.
-        if (o.breakAtCommas && lastComma > 0 && lastComma - i >= o.minWords) c += 500;
-        if (maxGap > o.pauseSplit) c += 80 + (maxGap > o.pauseSplit * 3 ? 300 : 0);
+        // ("Sometimes," / "Well," / "So," stay with what follows: at least 3 words before the comma)
+        if (o.breakAtCommas && lastComma > 0 && lastComma - i >= Math.max(o.minWords, 3)) c += 500;
+        // Pauses: grows with the length of the pause, so short hesitations inside a sentence
+        // don't split it ("Sometimes, … maybe, … I think") but a long pause clearly does.
+        if (maxGap > o.pauseSplit) c += 60 + 40 * (maxGap - o.pauseSplit) + (maxGap > o.pauseSplit * 2.5 ? 300 : 0);
         c += 1.5 * Math.abs(k - target);
         var total = best[i] + c + (j < n ? B.cost[j] : 0);
         if (total < best[j]) { best[j] = total; prev[j] = i; }
