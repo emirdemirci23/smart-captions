@@ -37,6 +37,15 @@ Load the **audio** too (a WAV of the same sequence or clip you transcribed: *Fil
 | Word-level JSON alone | 30–80 ms (as accurate as the transcription) |
 | SRT alone | 50–75 ms (captions starting mid-line are estimated, marked ≈) |
 
+**Measured on a real recording** (1 min 42 s, English, Premiere transcript + WAV; reference = where the sound actually starts for the 27 words that follow a clear pause):
+
+| | Average error | Median | Within 20 ms |
+|---|---|---|---|
+| Premiere's word times | 89 ms | 59 ms | 2 of 27 |
+| Smart Captions with the audio | **13 ms** | **3 ms** | **24 of 27** |
+
+Premiere's times in that file were about 200 ms early in the first half and about right in the second half; the panel corrects this *locally* (from the phrase starts within ±25 s of each word), not with one offset for the whole file.
+
 The audio step also corrects a transcript that **drifts** (e.g. 24 vs 23.976 fps: 0.1 % ≈ 0.6 s per 10 minutes), never starts a word inside silence, and places word starts differently after silence (sharp rise) and between words that run together (gentle rise).
 
 The panel reports how many words start on a clear sound. A word can't be measured when it runs into the previous word without any break in the sound; its time then comes from the transcript. Transcripts that are consistently a bit late or early are corrected automatically.

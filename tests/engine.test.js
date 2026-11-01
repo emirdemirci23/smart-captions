@@ -631,3 +631,17 @@ test('Turkish: hand-marked phrases (with the Zemberek word lists)', () => {
   const tags = (s) => P.tagTR(s.split(' ').map((t) => ({ text: t })));
   assert.deepEqual(tags('Elmalı turta yedik.'), ['ADJ', 'N', 'V']);
 });
+
+test('transcript that is early in one part and accurate in another (local offset, as seen in a real Premiere transcript)', () => {
+  const truth = S.makeTruth(Array(3).fill(sampleText).join(' '), 91, 'en');
+  const a = S.renderSpeech(truth, 92);
+  const env = E.analyzeAudio(a.samples, a.sampleRate);
+  const half = truth[truth.length - 1].end / 2;
+  // first half 200 ms early, second half accurate (like the real test file)
+  const tw = truth.map((w) => { const off = w.start < half ? -0.2 : 0; return { text: w.text, start: w.start + off, end: w.end + off }; });
+  for (let k = 1; k < tw.length; k++) if (tw[k].start <= tw[k - 1].start) tw[k].start = tw[k - 1].start + 0.01;
+  const p = E.prepareWords(JSON.stringify({ words: tw }), '', env, 'en');
+  const res = E.buildCaptions(p.words, { minWords: 3, maxWords: 6 });
+  const s = S.summary(S.captionErrors(res.captions, truth));
+  assert.ok(s.median < 6 && s.avg < 25, `median ${s.median.toFixed(1)} avg ${s.avg.toFixed(1)}`);
+});

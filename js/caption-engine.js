@@ -1399,19 +1399,36 @@
    * Median distance from word starts to the nearest clear onset: a transcript
    * that is consistently a bit late or early (common for speech recognition).
    */
+  var BIAS_WINDOW = 25;   // seconds on each side used for the local offset
+
+  /**
+   * How early/late the transcript is, measured where it can be measured
+   * reliably: phrase starts (after a pause or punctuation) against the sound
+   * resuming after silence. Speech recognisers are often off by a different
+   * amount in different parts of a file (in a real Premiere transcript: about
+   * 200 ms early in the first half, about right in the second), so the offset
+   * is estimated locally, from the anchors within ±15 s of each word.
+   * Returns a function time → seconds to add (or null when nothing reliable).
+   */
   function estimateBias(words, env) {
-    var d = [];
+    var anchors = [];
     words.forEach(function (w, i) {
-      if (i > 0 && w.start - words[i - 1].end < 0.15) return;   // phrase starts only
+      var phraseStart = i === 0 || w.start - words[i - 1].end >= 0.15 || /[.,!?;:…]["'”’)]*$/.test(words[i - 1].text);
+      if (!phraseStart) return;
       var best = null;
       onsetsBetween(env, w.start - 0.35, w.start + 0.35).forEach(function (o) {
         if (o.pause >= 0.08 && (best === null || Math.abs(o.t - w.start) < Math.abs(best))) best = o.t - w.start;
       });
-      if (best !== null) d.push(best);
+      if (best !== null) anchors.push([w.start, best]);
     });
-    if (d.length < 4) return 0;
-    var b = median(d);
-    return Math.abs(b) >= 0.005 ? b : 0;
+    if (anchors.length < 4) return null;
+    var global = median(anchors.map(function (a) { return a[1]; }));
+    return function (t) {
+      var local = [];
+      for (var k = 0; k < anchors.length; k++) if (Math.abs(anchors[k][0] - t) <= BIAS_WINDOW) local.push(anchors[k][1]);
+      var b = local.length >= 3 ? median(local) : global;
+      return Math.abs(b) >= 0.005 ? b : 0;
+    };
   }
 
   /**
@@ -1432,7 +1449,7 @@
       }
     } else {
       var bias = estimateBias(words, env);
-      if (bias) words.forEach(function (w) { w.start += bias; w.end += bias; });
+      if (bias) words.forEach(function (w) { var b = bias(w.start); w.start += b; w.end += b; });
       // Phrases: split at pauses in the transcript (and keep them reasonably short).
       while (i < n) {
         j = i + 1;
@@ -1784,7 +1801,7 @@
     refineWithAudio: refineWithAudio,
     decodeWav: decodeWav,
     countSyllables: countSyllables,
-    _flux: function (cfg) { if (cfg) { if ('enabled' in cfg) FLUX_ENABLED = cfg.enabled; if (cfg.z) FLUX_Z = cfg.z; if (cfg.lag) FLUX_LAG = cfg.lag; if (cfg.merge) FLUX_MERGE = cfg.merge; if (cfg.minDb !== undefined) ONSET_MIN_DB = cfg.minDb; if (cfg.frac !== undefined) ONSET_FRAC = cfg.frac; if (cfg.shallow !== undefined) SHALLOW_DB = cfg.shallow; if (cfg.suppress !== undefined) SUPPRESS_SILENCE = cfg.suppress; if (cfg.drift !== undefined) DRIFT_ENABLED = cfg.drift; } return { enabled: FLUX_ENABLED, z: FLUX_Z, lag: FLUX_LAG, merge: FLUX_MERGE }; },
+    _flux: function (cfg) { if (cfg) { if ('enabled' in cfg) FLUX_ENABLED = cfg.enabled; if (cfg.z) FLUX_Z = cfg.z; if (cfg.lag) FLUX_LAG = cfg.lag; if (cfg.merge) FLUX_MERGE = cfg.merge; if (cfg.minDb !== undefined) ONSET_MIN_DB = cfg.minDb; if (cfg.frac !== undefined) ONSET_FRAC = cfg.frac; if (cfg.shallow !== undefined) SHALLOW_DB = cfg.shallow; if (cfg.suppress !== undefined) SUPPRESS_SILENCE = cfg.suppress; if (cfg.drift !== undefined) DRIFT_ENABLED = cfg.drift; if (cfg.biasWindow !== undefined) BIAS_WINDOW = cfg.biasWindow; } return { enabled: FLUX_ENABLED, z: FLUX_Z, lag: FLUX_LAG, merge: FLUX_MERGE }; },
     detectLanguage: detectLanguage,
     SYNC: SYNC,
     parseTimedTranscript: parseTimedTranscript,
