@@ -110,7 +110,7 @@
     var on = $('continuous').checked;
     ['gapFrames', 'closeGapsUnder'].forEach(function (id) {
       $(id).disabled = on;
-      $(id).parentNode.classList.toggle('disabled', on);
+      ($(id).closest('.setting') || $(id).parentNode).classList.toggle('disabled', on);
     });
   }
 
@@ -159,6 +159,41 @@
   function fmtTime(t) {
     var m = Math.floor(t / 60), s = t - m * 60;
     return m + ':' + (s < 10 ? '0' : '') + s.toFixed(2);
+  }
+
+  function fmtClock(t) {
+    t = Math.max(0, Math.round(t));
+    var m = Math.floor(t / 60), s = t % 60;
+    return m + ':' + (s < 10 ? '0' : '') + s;
+  }
+
+  function svgIcon(id) {
+    var ns = 'http://www.w3.org/2000/svg';
+    var svg = document.createElementNS(ns, 'svg');
+    var use = document.createElementNS(ns, 'use');
+    use.setAttribute('href', '#' + id);
+    svg.appendChild(use);
+    return svg;
+  }
+
+  function el(tag, cls, text) {
+    var e = document.createElement(tag);
+    if (cls) e.className = cls;
+    if (text !== undefined) e.textContent = text;
+    return e;
+  }
+
+  /** Header colour follows the state: grey → blue (transcript) → green (synced to audio). */
+  function updateChrome() {
+    var hero = !state.timedText ? '#404040' : state.audioEnv ? '#1e6b3e' : '#2d4a8a';
+    document.documentElement.style.setProperty('--hero', hero);
+    $('timedBtn').classList.toggle('loaded', !!state.timedText);
+    $('audioBtn').classList.toggle('loaded', !!state.audioEnv);
+    var script = $('scriptText').value.trim();
+    $('scriptTile').classList.toggle('loaded', !!script);
+    $('scriptStatus').textContent = script ? script.split(/\s+/).length + ' words · click to edit' : 'Optional · corrected text';
+    $('npTitle').textContent = state.timedName || 'No transcript';
+    $('npSub').textContent = state.audioName ? '♪ ' + state.audioName : (state.timedText ? 'No audio · add a WAV for exact sync' : 'Drop a file anywhere');
   }
 
   /** Read a browser File object (file input / drag and drop) with encoding detection. */
@@ -246,6 +281,7 @@
   function loadAudio(file) {
     if (!file) return;
     $('audioName').textContent = 'Analysing ' + file.name + '…';
+    setStatus('Analysing audio…');
     // Let the label repaint before the (synchronous) analysis.
     setTimeout(function () {
       analyzeAudioFile(file).then(function (env) {
@@ -254,9 +290,11 @@
         state.prepared = null;
         var mins = Math.floor(env.duration / 60), secs = Math.round(env.duration % 60);
         $('audioName').textContent = file.name + ' · ' + mins + ':' + (secs < 10 ? '0' : '') + secs;
+        setStatus('');
         refresh();
       }).catch(function (e) {
-        $('audioName').textContent = 'No audio';
+        $('audioName').textContent = 'Optional · WAV for exact sync';
+        setStatus('');
         fileError(e);
       });
     }, 30);
@@ -264,6 +302,7 @@
 
   function loadTimed(file) {
     if (!file) return;
+    state.playing = null;
     state.timedText = file.text;
     state.timedName = file.name;
     state.prepared = null;
@@ -280,56 +319,103 @@
 
   function fileError(err) { setInfo('Could not open the file: ' + (err && err.message || err), 'error'); }
 
+  var FLAG_TEXT = {
+    short: 'fewer words than the minimum',
+    chars: 'a line is longer than the character limit'
+  };
+
   function renderPreview(res) {
     var list = $('captionList');
     list.innerHTML = '';
+    updateChrome();
     if (!res) {
       $('stats').textContent = '';
-      var empty = document.createElement('li');
-      empty.className = 'empty';
-      empty.textContent = 'Choose a timed transcript to see the captions here.';
+      $('heroSub').textContent = state.timedText ? 'Could not build captions' : 'Load a transcript to get started';
+      $('syncBar').style.width = '0';
+      $('npLeft').textContent = '0:00';
+      $('npRight').textContent = '0:00';
+      var empty = el('li', 'empty');
+      empty.appendChild(svgIcon('i-captions'));
+      empty.appendChild(el('h3', '', 'Your captions will appear here'));
+      empty.appendChild(el('p', '', 'Choose a transcript (Premiere JSON, SRT or VTT) or drop it anywhere on the panel.'));
+      var cta = el('button', 'cta', 'Choose transcript');
+      cta.type = 'button';
+      cta.addEventListener('click', function () { $('timedBtn').click(); });
+      empty.appendChild(cta);
       list.appendChild(empty);
       return;
     }
-    var st = res.stats;
-    $('stats').textContent = st.captions + ' captions · avg ' + st.avgWords.toFixed(1) + ' words' +
+    var st = res.stats, caps = res.captions;
+    var total = caps.length ? caps[caps.length - 1].end : 0;
+    $('heroSub').textContent = state.timedName;
+    $('stats').textContent = st.captions + ' captions, ' + fmtClock(total) + ' · avg ' + st.avgWords.toFixed(1) + ' words' +
       (st.flagged ? ' · ' + st.flagged + ' flagged' : '') +
-      (st.estimated ? ' · ' + st.estimated + ' estimated (≈)' : '') +
-      (st.audioSynced ? ' · ' + st.audioAnchored + '/' + st.captions + ' starts on a clear sound (♪)' : '') +
-      (res.languageDetected ? ' · ' + E.LANGS[res.language].name + ' rules (auto)' : '');
+      (st.estimated ? ' · ' + st.estimated + ' estimated' : '') +
+      (res.languageDetected ? ' · ' + E.LANGS[res.language].name : '');
+    // Bottom bar: share of caption starts that sit on a clear sound.
+    var ratio = st.audioSynced ? st.audioAnchored / Math.max(1, st.captions) : 0;
+    $('syncBar').style.width = (ratio * 100).toFixed(1) + '%';
+    $('npLeft').textContent = caps.length ? fmtClock(caps[0].start) : '0:00';
+    $('npRight').textContent = fmtClock(total);
+    $('syncBar').parentNode.parentNode.title = st.audioSynced
+      ? st.audioAnchored + ' of ' + st.captions + ' caption starts sit on a clear sound in the audio'
+      : 'Add the audio (WAV) to sync captions to the sound';
+
     var frag = document.createDocumentFragment();
-    res.captions.forEach(function (c) {
-      var li = document.createElement('li');
-      if (c.flags.length) li.className = 'flagged';
-      var time = document.createElement('span');
-      time.className = 'time';
-      time.textContent = (c.estimatedStart ? '≈' : c.audioAnchored ? '♪' : '') + fmtTime(c.start) + '\n' + fmtTime(c.end);
-      if (c.audioAnchored) time.title = 'Starts exactly where the word begins in the audio.';
-      else if (c.audioSynced) time.title = 'Timed from the audio, but there is no clear break in the sound here (words run together).';
-      if (c.estimatedStart) time.title = 'Estimated: this caption starts in the middle of a line of the source file.';
-      time.style.whiteSpace = 'pre';
-      var text = document.createElement('span');
-      text.className = 'text';
-      text.textContent = c.lines.join('\n');
-      var count = document.createElement('span');
-      count.className = 'count';
-      count.textContent = c.wordCount;
-      count.title = c.wordCount + ' words';
-      li.appendChild(time); li.appendChild(text); li.appendChild(count);
+    caps.forEach(function (c, i) {
+      var li = el('li', 'track' + (cep ? ' jumpable' : '') + (state.playing === i ? ' playing' : ''));
+      li.dataset.index = i;
+
+      var num = el('div', 'idx');
+      num.appendChild(el('span', '', String(i + 1)));
+      num.appendChild(svgIcon('i-play'));
+      li.appendChild(num);
+
+      var title = el('div', 'title');
+      title.appendChild(el('div', 'text', c.lines.join('\n')));
+      var meta = el('div', 'meta');
+      if (c.audioAnchored) { var b = el('span', 'badge synced', '♪'); b.title = 'Starts exactly where the word begins in the audio'; meta.appendChild(b); }
+      else if (c.estimatedStart) { var be = el('span', 'badge est', '≈'); be.title = 'Estimated: starts in the middle of a line of the source file'; meta.appendChild(be); }
+      else if (c.audioSynced) { var ba = el('span', 'badge', '♪'); ba.title = 'Timed from the audio; words run together here'; meta.appendChild(ba); }
+      meta.appendChild(el('span', '', c.wordCount + (c.wordCount === 1 ? ' word' : ' words')));
       if (c.flags.length) {
-        var flag = document.createElement('span');
-        flag.className = 'flag';
-        flag.textContent = c.flags.map(function (f) {
-          if (f === 'short') return 'fewer words than the minimum';
-          if (f === 'chars') return 'a line is longer than the character limit';
+        meta.appendChild(el('span', 'badge flag', '!'));
+        meta.appendChild(el('span', 'flagtext', c.flags.map(function (f) {
+          if (FLAG_TEXT[f]) return FLAG_TEXT[f];
           if (f.indexOf('long') === 0) return 'more words than the maximum' + f.slice(4);
           return f;
-        }).join(' · ');
-        li.appendChild(flag);
+        }).join(' · ')));
       }
+      title.appendChild(meta);
+      li.appendChild(title);
+
+      li.appendChild(el('div', 'start', fmtTime(c.start)));
+      li.appendChild(el('div', 'dur', (c.end - c.start).toFixed(2) + 's'));
       frag.appendChild(li);
     });
     list.appendChild(frag);
+  }
+
+  /** Click a caption: move Premiere's playhead to it. */
+  function jumpTo(index) {
+    if (!state.result || !state.result.captions[index]) return;
+    var prev = $('captionList').querySelector('.track.playing');
+    if (prev) prev.classList.remove('playing');
+    var row = $('captionList').querySelector('.track[data-index="' + index + '"]');
+    if (row) row.classList.add('playing');
+    state.playing = index;
+    if (!cep) return;
+    var c = state.result.captions[index];
+    evalJSX('sc_getSequenceInfo()').then(function (info) {
+      if (!info.ok) throw new Error(info.error);
+      var mode = $('alignMode').value, extra = 0;
+      if (mode === 'clip' && info.clipOffset !== null && info.clipOffset !== undefined) extra = info.clipOffset;
+      if (mode === 'playhead') extra = state.placedAtPlayhead || 0;
+      return evalJSX('sc_setPlayhead(' + (c.start + extra) + ')');
+    }).then(function (r) {
+      if (r && !r.ok) throw new Error(r.error);
+      setStatus('▶ ' + c.text.slice(0, 60));
+    }).catch(function (e) { setStatus(e.message, 'error'); });
   }
 
   // ---------------------------------------------------------------------------
@@ -422,6 +508,7 @@
       extra = info.clipOffset;
     } else if (mode === 'playhead') {
       extra = info ? info.playhead : 0;
+      state.placedAtPlayhead = extra;
     }
     var fd = info && info.frameDuration > 0 ? info.frameDuration : 0;
     if (fd) state.frameDuration = fd;
@@ -433,6 +520,7 @@
   function createTrack() {
     setStatus('Creating caption track…');
     toggleButtons(false);
+    $('createBtn').classList.add('busy');
     evalJSX('sc_getSequenceInfo()').then(function (info) {
       if (!info.ok) throw new Error(info.error);
       var res = buildForSequence(info);
@@ -444,7 +532,7 @@
         });
     }).catch(function (e) {
       setStatus(e.message, 'error');
-    }).then(function () { toggleButtons(!!state.result); });
+    }).then(function () { toggleButtons(!!state.result); $('createBtn').classList.remove('busy'); });
   }
 
   function saveSrt() {
@@ -514,12 +602,30 @@
 
     $('clearScript').addEventListener('click', function () { $('scriptText').value = ''; refresh(); });
 
+    $('scriptTile').addEventListener('click', function () {
+      var panel = $('scriptPanel');
+      panel.hidden = !panel.hidden;
+      $('scriptTile').classList.toggle('active', !panel.hidden);
+      if (!panel.hidden) $('scriptText').focus();
+    });
+    // Tiles behave like buttons for the keyboard too.
+    ['timedBtn', 'scriptTile', 'audioBtn'].forEach(function (id) {
+      $(id).addEventListener('keydown', function (ev) {
+        if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); $(id).click(); }
+      });
+    });
+    $('captionList').addEventListener('click', function (ev) {
+      var row = ev.target.closest('.track');
+      if (row) jumpTo(+row.dataset.index);
+    });
+
     $('audioBtn').addEventListener('click', function () {
       pickFile('audioFile', 'Choose the audio (WAV) of the same sequence or clip', true).then(loadAudio, fileError);
     });
-    $('clearAudio').addEventListener('click', function () {
+    $('clearAudio').addEventListener('click', function (ev) {
+      ev.stopPropagation();
       state.audioEnv = null; state.audioName = ''; state.prepared = null;
-      $('audioName').textContent = 'No audio';
+      $('audioName').textContent = 'Optional · WAV for exact sync';
       refresh();
     });
 
@@ -556,12 +662,13 @@
       evalJSX('sc_getSequenceInfo()').then(function (info) {
         if (info.ok) {
           $('seqName').textContent = info.name;
+          $('createBtn').title = 'Create caption track on "' + info.name + '"';
           state.frameDuration = info.frameDuration || state.frameDuration;
         }
       });
     } else {
       $('createBtn').title = 'Available inside Premiere Pro';
-      setStatus('Browser preview mode – "Create caption track" works inside Premiere Pro.', '');
+      setStatus('Preview mode – creating the caption track works inside Premiere Pro');
     }
   }
 

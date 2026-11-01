@@ -149,3 +149,16 @@ function sc_saveSRT(encodedSrt, defaultName) {
         return sc_error(e);
     }
 }
+
+/** Move the playhead to a time (seconds from the sequence start). */
+function sc_setPlayhead(seconds) {
+    try {
+        var seq = app.project.activeSequence;
+        if (!seq) return sc_error('No active sequence.');
+        var ticks = Math.round(Math.max(0, seconds) * SC_TICKS_PER_SECOND);
+        seq.setPlayerPosition(String(ticks));
+        return sc_json({ ok: true });
+    } catch (e) {
+        return sc_error(e);
+    }
+}

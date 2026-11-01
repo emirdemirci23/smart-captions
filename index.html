@@ -7,110 +7,172 @@
   <link rel="stylesheet" href="css/style.css">
 </head>
 <body>
-  <header>
-    <h1>Smart Captions</h1>
-    <span class="header-right"><span id="seqName" class="muted"></span><span id="updateStatus" class="update"></span></span>
-  </header>
+  <!-- Icon sprite -->
+  <svg width="0" height="0" style="position:absolute" aria-hidden="true">
+    <symbol id="i-play" viewBox="0 0 24 24"><path d="M7.05 3.6a1 1 0 0 1 1.02.03l12 7.5a1 1 0 0 1 0 1.74l-12 7.5A1 1 0 0 1 6.5 19.5v-15a1 1 0 0 1 .55-.9z"/></symbol>
+    <symbol id="i-download" viewBox="0 0 24 24"><path d="M12 1.5a10.5 10.5 0 1 0 0 21 10.5 10.5 0 0 0 0-21zM0 12a12 12 0 1 1 24 0 12 12 0 0 1-24 0z"/><path d="M12.75 6v8.19l2.72-2.72 1.06 1.06L12 17.06l-4.53-4.53 1.06-1.06 2.72 2.72V6h1.5z"/></symbol>
+    <symbol id="i-clock" viewBox="0 0 16 16"><path d="M8 1.5a6.5 6.5 0 1 0 0 13 6.5 6.5 0 0 0 0-13zM0 8a8 8 0 1 1 16 0A8 8 0 0 1 0 8z"/><path d="M8 3.25a.75.75 0 0 1 .75.75v3.25H11a.75.75 0 0 1 0 1.5H7.25V4A.75.75 0 0 1 8 3.25z"/></symbol>
+    <symbol id="i-captions" viewBox="0 0 24 24"><path d="M3 5.5A2.5 2.5 0 0 1 5.5 3h13A2.5 2.5 0 0 1 21 5.5v13a2.5 2.5 0 0 1-2.5 2.5h-13A2.5 2.5 0 0 1 3 18.5v-13zM5.5 5a.5.5 0 0 0-.5.5v13a.5.5 0 0 0 .5.5h13a.5.5 0 0 0 .5-.5v-13a.5.5 0 0 0-.5-.5h-13z"/><path d="M7 13h4v2H7zM13 13h4v2h-4zM7 9.5h7v2H7zM15.5 9.5H17v2h-1.5z"/></symbol>
+    <symbol id="i-doc" viewBox="0 0 24 24"><path d="M6 2h8.5L20 7.5V20a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2zm7.5 2H6v16h12V8.5h-4.5v-4.5zM8 12h8v2H8zm0 4h8v2H8z"/></symbol>
+    <symbol id="i-pen" viewBox="0 0 24 24"><path d="M17.3 2.3a2.5 2.5 0 0 1 3.5 0l.9.9a2.5 2.5 0 0 1 0 3.5L9 19.4 3 21l1.6-6L17.3 2.3zm2.1 1.4a.5.5 0 0 0-.7 0L6.4 16l-.6 2.2 2.2-.6L20.3 5.3a.5.5 0 0 0 0-.7l-.9-.9z"/></symbol>
+    <symbol id="i-wave" viewBox="0 0 24 24"><path d="M11 3h2v18h-2zM7 7h2v10H7zM15 6h2v12h-2zM3 10h2v4H3zM19 9h2v6h-2z"/></symbol>
+    <symbol id="i-x" viewBox="0 0 16 16"><path d="M2.47 2.47a.75.75 0 0 1 1.06 0L8 6.94l4.47-4.47a.75.75 0 1 1 1.06 1.06L9.06 8l4.47 4.47a.75.75 0 1 1-1.06 1.06L8 9.06l-4.47 4.47a.75.75 0 0 1-1.06-1.06L6.94 8 2.47 3.53a.75.75 0 0 1 0-1.06z"/></symbol>
+    <symbol id="i-chevron" viewBox="0 0 16 16"><path d="M14 10.94 8 4.94l-6 6 1.06 1.06L8 7.06 12.94 12 14 10.94z"/></symbol>
+  </svg>
 
-  <details open>
-    <summary>1 · Transcript</summary>
-    <div class="section">
-      <label class="field">
-        <span>Timed transcript <em class="muted">(SRT, VTT, JSON, timestamped text – or drag a file onto the panel)</em></span>
-        <div class="filerow">
-          <button class="btn small" id="timedBtn" type="button">Choose file…</button>
-          <input type="file" id="timedFile" hidden>
-          <span id="timedName" class="muted ellipsis">No file chosen</span>
-        </div>
-      </label>
-      <label class="field">
-        <span>Corrected script <em class="muted">(optional – plain text; its words replace the transcript's words)</em></span>
-        <div class="filerow">
-          <button class="btn small" id="scriptBtn" type="button">Load .txt…</button>
-          <input type="file" id="scriptFile" hidden>
-          <button class="btn small ghost" id="clearScript" type="button">Clear</button>
-        </div>
-        <textarea id="scriptText" rows="4" placeholder="Paste the script here (optional). A line break = preferred break, | = forced break."></textarea>
-      </label>
-      <label class="field">
-        <span>Audio for precise sync <em class="muted">(optional – WAV of the same sequence/clip you transcribed)</em></span>
-        <div class="filerow">
-          <button class="btn small" id="audioBtn" type="button">Choose audio…</button>
-          <input type="file" id="audioFile" hidden>
-          <button class="btn small ghost" id="clearAudio" type="button">Clear</button>
-          <span id="audioName" class="muted ellipsis">No audio</span>
-        </div>
-      </label>
-      <div id="sourceInfo" class="info"></div>
-    </div>
-  </details>
-
-  <details open>
-    <summary>2 · Caption rules</summary>
-    <div class="section grid">
-      <label class="field"><span>Min words</span><input type="number" id="minWords" min="1" max="30" step="1"></label>
-      <label class="field"><span>Max words</span><input type="number" id="maxWords" min="1" max="40" step="1"></label>
-      <label class="field"><span>Max characters / line</span><input type="number" id="maxCharsPerLine" min="10" max="100" step="1"></label>
-      <label class="field"><span>Lines</span>
-        <select id="maxLines"><option value="1">1 line</option><option value="2">2 lines</option></select>
-      </label>
-      <label class="field"><span>Min duration (s)</span><input type="number" id="minDuration" min="0" max="10" step="0.1"></label>
-      <label class="field"><span>Max duration (s)</span><input type="number" id="maxDuration" min="1" max="30" step="0.5"></label>
-      <label class="field"><span>Split at pauses over (s)</span><input type="number" id="pauseSplit" min="0.1" max="10" step="0.1"></label>
-      <label class="field"><span>Close gaps under (s)</span><input type="number" id="closeGapsUnder" min="0" max="5" step="0.1"></label>
-      <label class="field"><span>Gap between captions (frames)</span><input type="number" id="gapFrames" min="0" max="30" step="1"></label>
-      <label class="field"><span>Language rules</span>
-        <select id="language"></select>
-      </label>
-      <label class="check span2"><input type="checkbox" id="continuous"> Continuous – each caption stays until the next one starts</label>
-      <label class="check span2"><input type="checkbox" id="splitSentences"> One sentence per caption (short sentences may go under the minimum)</label>
-      <label class="check span2"><input type="checkbox" id="breakAtCommas"> End at a comma once the caption has the minimum words</label>
-      <label class="check span2"><input type="checkbox" id="avoidWeakEdges"> Avoid ending on weak words ("of", "the"…) – off: allowed</label>
-    </div>
-  </details>
-
-  <details open>
-    <summary>3 · Keep together</summary>
-    <div class="section">
-      <label class="field">
-        <span>Phrases that must stay in one caption <em class="muted">(one per line; with Auto-detect they are added to the language's built-in list)</em></span>
-        <textarea id="phrases" rows="5" spellcheck="false"></textarea>
-      </label>
-      <div class="row wrap">
-        <label class="check"><input type="checkbox" id="protectNames"> Names (New York, Emma Stone)</label>
-        <label class="check"><input type="checkbox" id="protectNumbers"> Numbers + units (10 minutes)</label>
+  <div class="app">
+    <main class="main-view" id="mainView">
+      <div class="topbar">
+        <span id="seqName" class="pill-label"></span>
+        <span id="updateStatus" class="update"></span>
       </div>
-      <button class="btn small ghost" id="resetPhrases" type="button">Reset to language defaults</button>
-    </div>
-  </details>
 
-  <details open>
-    <summary>4 · Placement</summary>
-    <div class="section grid">
-      <label class="field"><span>Transcript time 0 is at</span>
-        <select id="alignMode">
-          <option value="sequence">Sequence start</option>
-          <option value="clip">Selected clip's media start</option>
-          <option value="playhead">Playhead</option>
-        </select>
-      </label>
-      <label class="field"><span>Extra offset (s)</span><input type="number" id="offset" step="0.04"></label>
-    </div>
-  </details>
+      <!-- Playlist-style header -->
+      <header class="hero">
+        <div class="hero-cover" aria-hidden="true"><svg><use href="#i-captions"/></svg></div>
+        <div class="hero-meta">
+          <span class="eyebrow">Caption track</span>
+          <h1>Smart Captions</h1>
+          <p class="hero-sub"><span id="heroSub">Load a transcript to get started</span><span id="stats"></span></p>
+        </div>
+      </header>
 
-  <div class="actions">
-    <button class="btn primary" id="createBtn" type="button" disabled>Create caption track</button>
-    <button class="btn" id="saveBtn" type="button" disabled>Save SRT…</button>
+      <div class="action-bar">
+        <button class="play-btn" id="createBtn" type="button" disabled title="Create caption track" aria-label="Create caption track">
+          <svg><use href="#i-play"/></svg>
+        </button>
+        <div class="action-text">
+          <span class="action-title">Create caption track</span>
+          <span class="action-hint">on the active sequence</span>
+        </div>
+        <button class="icon-btn" id="saveBtn" type="button" disabled title="Save SRT…" aria-label="Save SRT">
+          <svg><use href="#i-download"/></svg>
+        </button>
+      </div>
+
+      <div class="content">
+        <!-- Sources: library-style tiles -->
+        <section class="shelf">
+          <h2 class="shelf-title">Your sources</h2>
+          <div class="tiles">
+            <div class="tile" id="timedBtn" role="button" tabindex="0">
+              <div class="tile-art art-transcript"><svg><use href="#i-doc"/></svg></div>
+              <div class="tile-text">
+                <span class="tile-title">Transcript</span>
+                <span class="tile-sub" id="timedName">Choose file · SRT, VTT, JSON</span>
+              </div>
+            </div>
+            <div class="tile" id="scriptTile" role="button" tabindex="0">
+              <div class="tile-art art-script"><svg><use href="#i-pen"/></svg></div>
+              <div class="tile-text">
+                <span class="tile-title">Script</span>
+                <span class="tile-sub" id="scriptStatus">Optional · corrected text</span>
+              </div>
+            </div>
+            <div class="tile" id="audioBtn" role="button" tabindex="0">
+              <div class="tile-art art-audio"><svg><use href="#i-wave"/></svg></div>
+              <div class="tile-text">
+                <span class="tile-title">Audio</span>
+                <span class="tile-sub" id="audioName">Optional · WAV for exact sync</span>
+              </div>
+              <button class="tile-clear" id="clearAudio" type="button" title="Remove audio" aria-label="Remove audio"><svg><use href="#i-x"/></svg></button>
+            </div>
+          </div>
+          <input type="file" id="timedFile" hidden>
+          <input type="file" id="scriptFile" hidden>
+          <input type="file" id="audioFile" hidden>
+
+          <div class="script-panel" id="scriptPanel" hidden>
+            <textarea id="scriptText" rows="5" placeholder="Paste the corrected script here. A line break = preferred break, | = forced break."></textarea>
+            <div class="row">
+              <button class="pill-btn" id="scriptBtn" type="button">Load .txt</button>
+              <button class="text-btn" id="clearScript" type="button">Clear</button>
+            </div>
+          </div>
+          <div id="sourceInfo" class="info"></div>
+        </section>
+
+        <!-- Track list -->
+        <section class="tracklist">
+          <div class="tracklist-head">
+            <span class="col-num">#</span>
+            <span class="col-title">Caption</span>
+            <span class="col-start">Start</span>
+            <span class="col-dur" title="Duration"><svg><use href="#i-clock"/></svg></span>
+          </div>
+          <ol id="captionList" class="tracks"></ol>
+        </section>
+
+        <!-- Settings page style -->
+        <section class="settings">
+          <details class="group" open>
+            <summary><span>Caption rules</span><svg class="chev"><use href="#i-chevron"/></svg></summary>
+            <div class="setting"><div class="setting-label"><span>Min words</span><small>Fewest words in a caption</small></div><input class="num" type="number" id="minWords" min="1" max="30" step="1"></div>
+            <div class="setting"><div class="setting-label"><span>Max words</span><small>Most words in a caption</small></div><input class="num" type="number" id="maxWords" min="1" max="40" step="1"></div>
+            <div class="setting"><div class="setting-label"><span>Characters per line</span><small>Longer captions wrap onto a second line</small></div><input class="num" type="number" id="maxCharsPerLine" min="10" max="100" step="1"></div>
+            <div class="setting"><div class="setting-label"><span>Lines</span></div>
+              <select id="maxLines"><option value="1">1 line</option><option value="2">2 lines</option></select></div>
+            <div class="setting"><div class="setting-label"><span>Language rules</span><small>Grammar used for splitting</small></div><select id="language"></select></div>
+            <div class="setting"><div class="setting-label"><span>Continuous</span><small>Each caption stays until the next one starts</small></div><label class="switch"><input type="checkbox" id="continuous"><span></span></label></div>
+            <div class="setting"><div class="setting-label"><span>One sentence per caption</span><small>Short sentences may go under the minimum</small></div><label class="switch"><input type="checkbox" id="splitSentences"><span></span></label></div>
+            <div class="setting"><div class="setting-label"><span>End at commas</span><small>Once the caption has the minimum words</small></div><label class="switch"><input type="checkbox" id="breakAtCommas"><span></span></label></div>
+            <div class="setting"><div class="setting-label"><span>Avoid weak endings</span><small>Don't end on "of", "the"… (off: allowed)</small></div><label class="switch"><input type="checkbox" id="avoidWeakEdges"><span></span></label></div>
+          </details>
+
+          <details class="group">
+            <summary><span>Timing</span><svg class="chev"><use href="#i-chevron"/></svg></summary>
+            <div class="setting"><div class="setting-label"><span>Min duration</span><small>Seconds a caption stays at least</small></div><input class="num" type="number" id="minDuration" min="0" max="10" step="0.1"></div>
+            <div class="setting"><div class="setting-label"><span>Max duration</span><small>Longer captions get split</small></div><input class="num" type="number" id="maxDuration" min="1" max="30" step="0.5"></div>
+            <div class="setting"><div class="setting-label"><span>Split at pauses over</span><small>Seconds</small></div><input class="num" type="number" id="pauseSplit" min="0.1" max="10" step="0.1"></div>
+            <div class="setting"><div class="setting-label"><span>Close gaps under</span><small>Seconds (when not continuous)</small></div><input class="num" type="number" id="closeGapsUnder" min="0" max="5" step="0.1"></div>
+            <div class="setting"><div class="setting-label"><span>Gap between captions</span><small>Frames (when not continuous)</small></div><input class="num" type="number" id="gapFrames" min="0" max="30" step="1"></div>
+          </details>
+
+          <details class="group">
+            <summary><span>Keep together</span><svg class="chev"><use href="#i-chevron"/></svg></summary>
+            <div class="setting"><div class="setting-label"><span>Names</span><small>New York, Emma Stone</small></div><label class="switch"><input type="checkbox" id="protectNames"><span></span></label></div>
+            <div class="setting"><div class="setting-label"><span>Numbers + units</span><small>10 minutes, $5 million</small></div><label class="switch"><input type="checkbox" id="protectNumbers"><span></span></label></div>
+            <div class="setting stacked"><div class="setting-label"><span>Phrases</span><small>One per line. With Auto-detect they're added to the language's built-in list.</small></div>
+              <textarea id="phrases" rows="5" spellcheck="false"></textarea>
+              <button class="text-btn" id="resetPhrases" type="button">Reset to language defaults</button>
+            </div>
+          </details>
+
+          <details class="group">
+            <summary><span>Placement</span><svg class="chev"><use href="#i-chevron"/></svg></summary>
+            <div class="setting"><div class="setting-label"><span>Transcript time 0 is at</span></div>
+              <select id="alignMode">
+                <option value="sequence">Sequence start</option>
+                <option value="clip">Selected clip's media start</option>
+                <option value="playhead">Playhead</option>
+              </select></div>
+            <div class="setting"><div class="setting-label"><span>Extra offset</span><small>Seconds</small></div><input class="num" type="number" id="offset" step="0.04"></div>
+          </details>
+        </section>
+      </div>
+    </main>
+
+    <!-- Now-playing bar -->
+    <footer class="now-playing">
+      <div class="np-left">
+        <div class="np-art" aria-hidden="true"><svg><use href="#i-captions"/></svg></div>
+        <div class="np-text">
+          <span class="np-title" id="npTitle">No transcript</span>
+          <span class="np-sub" id="npSub">Drop a file anywhere</span>
+        </div>
+      </div>
+      <div class="np-center">
+        <div id="status" class="status" role="status"></div>
+        <div class="np-progress" title="Caption starts that sit on a clear sound in the audio">
+          <span class="np-time" id="npLeft">0:00</span>
+          <div class="bar"><div class="bar-fill" id="syncBar"></div></div>
+          <span class="np-time" id="npRight">0:00</span>
+        </div>
+      </div>
+    </footer>
   </div>
-  <div id="status" class="status" role="status"></div>
 
-  <section class="preview">
-    <div class="preview-head">
-      <h2>Preview</h2>
-      <span id="stats" class="muted"></span>
-    </div>
-    <ol id="captionList" class="captions"></ol>
-  </section>
+  <div class="drop-overlay" aria-hidden="true"><div><svg><use href="#i-download"/></svg><span>Drop to load</span></div></div>
 
   <script src="js/caption-engine.js"></script>
   <script src="js/updater.js"></script>

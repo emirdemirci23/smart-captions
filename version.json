@@ -1,7 +1,7 @@
 {
-  "version": "1.5.0",
-  "date": "2026-10-31",
-  "notes": "End captions at commas once they have the minimum words; allow ending on words like 'of'",
+  "version": "1.6.0",
+  "date": "2026-11-01",
+  "notes": "New dark music-app style interface; click a caption to jump the playhead to it",
   "files": [
     "index.html",
     "css/style.css",

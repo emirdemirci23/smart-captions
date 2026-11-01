@@ -65,6 +65,9 @@ Restart Premiere Pro → **Window → Extensions → Smart Captions**.
 
 ## Using it
 
+The panel has a dark, music-app style layout: a header with your caption stats, a big green button to create the caption track, source tiles (transcript, script, audio), the captions as a numbered track list (click one to move Premiere's playhead to it; ♪ = starts exactly on the sound) and a bottom bar with status and how much of the timing is locked to the audio.
+
+
 1. Open your sequence.
 2. In the panel click **Choose file…** (or drag the file onto the panel) and pick the timed transcript. UTF-8, UTF-16 and Windows (Turkish/Western) encodings are detected automatically. Optionally paste/load the script.
 3. Adjust **Min / Max words** and the other rules; the preview updates live. Flagged captions are marked in orange.
